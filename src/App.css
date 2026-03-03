@@ -34,12 +34,10 @@
 .menu-toggle:hover {
   background-color: rgba(255, 255, 255, 0.28);
 }
-
 .menu-toggle:focus-visible {
   outline: 2px solid #ffffff;
   outline-offset: 2px;
 }
-
 .left-sidebar {
   position: fixed;
   top: 88px;
@@ -83,7 +81,6 @@
 .sidebar-links a:hover {
   text-decoration: underline;
 }
-
 @media (max-width: 768px) {
   .top-bar {
     height: 74px;
