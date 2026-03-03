@@ -84,6 +84,17 @@
   text-decoration: underline;
 }
 
+
+@media (min-width: 769px) {
+  .App {
+    padding-left: 250px;
+  }
+
+  .left-sidebar {
+    transform: translateX(0);
+  }
+}
+
 @media (max-width: 768px) {
   .top-bar {
     height: 74px;
