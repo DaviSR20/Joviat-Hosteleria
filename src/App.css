@@ -10,10 +10,143 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
 }
 
 .top-bar-logo {
   max-height: 64px;
   width: auto;
+}
+
+.menu-toggle {
+  position: absolute;
+  left: 20px;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.18);
+  font-size: 28px;
+  cursor: pointer;
+}
+
+.menu-toggle:hover {
+  background-color: rgba(255, 255, 255, 0.28);
+}
+
+.menu-toggle:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.left-sidebar {
+  position: fixed;
+  top: 88px;
+  left: 0;
+  width: 250px;
+  max-width: 90vw;
+  height: calc(100vh - 88px);
+  background-color: #2e3336;
+  color: #ffffff;
+  padding: 24px 16px;
+  transform: translateX(-100%);
+  transition: transform 0.25s ease;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2);
+  overflow-y: auto;
+}
+
+.left-sidebar.open {
+  transform: translateX(0);
+}
+
+.sidebar-title {
+  margin: 0 0 16px;
+  font-size: 24px;
+}
+
+.sidebar-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar-links a {
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 18px;
+}
+
+.sidebar-links a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .top-bar {
+    height: 74px;
+  }
+
+  .top-bar-logo {
+    max-height: 50px;
+  }
+
+  .menu-toggle {
+    left: 14px;
+    padding: 7px 10px;
+    font-size: 24px;
+  }
+
+  .left-sidebar {
+    top: 74px;
+    width: min(82vw, 320px);
+    height: calc(100vh - 74px);
+    padding: 20px 14px;
+  }
+
+  .sidebar-title {
+    font-size: 21px;
+  }
+
+  .sidebar-links a {
+    font-size: 17px;
+  }
+}
+
+@media (max-width: 480px) {
+  .top-bar {
+    height: 64px;
+  }
+
+  .top-bar-logo {
+    max-height: 40px;
+  }
+
+  .menu-toggle {
+    left: 10px;
+    padding: 6px 9px;
+    font-size: 21px;
+  }
+
+  .left-sidebar {
+    top: 64px;
+    width: 86vw;
+    height: calc(100vh - 64px);
+    padding: 18px 12px;
+  }
+
+  .sidebar-title {
+    margin-bottom: 12px;
+    font-size: 19px;
+  }
+
+  .sidebar-links {
+    gap: 10px;
+  }
+
+  .sidebar-links a {
+    font-size: 16px;
+  }
 }
