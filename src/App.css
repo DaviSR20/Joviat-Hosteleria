@@ -42,20 +42,19 @@
 
 .left-sidebar {
   position: fixed;
-  top: 88px;
+  top: 0; /* antes 88px */
   left: 0;
   width: 250px;
   max-width: 90vw;
-  height: calc(100vh - 88px);
+  height: 100vh; /* antes calc(...) */
   background-color: #2e3336;
   color: #ffffff;
-  padding: 24px 16px;
+  padding: 110px 16px 24px; /* espacio arriba para no tapar el logo */
   transform: translateX(-100%);
   transition: transform 0.25s ease;
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2);
   overflow-y: auto;
 }
-
 .left-sidebar.open {
   transform: translateX(0);
 }
