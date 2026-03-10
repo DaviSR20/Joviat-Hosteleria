@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getRestaurants } from './firestoreApi';
 
 const BARCELONA_CENTER = [41.3874, 2.1686];
@@ -39,8 +39,16 @@ function ShopsMapView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [viewMode, setViewMode] = useState('map');
+  const [searchTerm, setSearchTerm] = useState('');
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
+
+  const filteredRestaurants = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+    if (!normalizedSearch) return restaurants;
+
+    return restaurants.filter((restaurant) => restaurant.name.toLowerCase().includes(normalizedSearch));
+  }, [restaurants, searchTerm]);
 
   useEffect(() => {
     let isMounted = true;
@@ -90,7 +98,7 @@ function ShopsMapView() {
 
         const map = mapInstanceRef.current;
 
-        restaurants.forEach((restaurant) => {
+        filteredRestaurants.forEach((restaurant) => {
           window.L.marker([restaurant.lat, restaurant.lng])
             .addTo(map)
             .bindPopup(`<strong>${restaurant.name}</strong>`);
@@ -111,7 +119,7 @@ function ShopsMapView() {
         mapInstanceRef.current = null;
       }
     };
-  }, [restaurants, loading, error, viewMode]);
+  }, [filteredRestaurants, loading, error, viewMode]);
 
   return (
     <section>
@@ -120,6 +128,18 @@ function ShopsMapView() {
       {error && <p>{error}</p>}
       {!loading && !error && (
         <>
+          <div className="search-box">
+            <label htmlFor="shops-search" className="search-label">Buscar restaurante por nombre</label>
+            <input
+              id="shops-search"
+              type="text"
+              className="search-input"
+              placeholder="Ej: Taverna"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+          </div>
+
           <div className="shops-view-toggle" role="tablist" aria-label="Modo de visualización de tiendas">
             <button
               type="button"
@@ -137,11 +157,13 @@ function ShopsMapView() {
             </button>
           </div>
 
-          {viewMode === 'map' && <div ref={mapContainerRef} className="shops-map" />}
+          {filteredRestaurants.length === 0 && <p>No hay tiendas que coincidan con tu búsqueda.</p>}
+
+          {viewMode === 'map' && filteredRestaurants.length > 0 && <div ref={mapContainerRef} className="shops-map" />}
 
           {viewMode === 'list' && (
             <div className="shops-cards">
-              {restaurants.map((restaurant) => (
+              {filteredRestaurants.map((restaurant) => (
                 <article key={restaurant.id} className="shop-card">
                   <h2>{restaurant.name}</h2>
                   <p>Latitud: {restaurant.lat.toFixed(5)}</p>
