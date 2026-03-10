@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import './App.css';
 import logo from './logo_joviat.webp';
+import StudentsView from './StudentsView';
+import ShopsMapView from './ShopsMapView';
 
 function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState('students');
   const [isMobileView, setIsMobileView] = useState(() => window.innerWidth <= 768);
 
   useEffect(() => {
@@ -21,6 +24,13 @@ function App() {
   }, []);
 
   const isSidebarVisible = !isMobileView || isMenuOpen;
+
+  const handleSectionChange = (section) => {
+    setActiveSection(section);
+    if (isMobileView) {
+      setIsMenuOpen(false);
+    }
+  };
 
   return (
     <div className="App">
@@ -48,13 +58,32 @@ function App() {
         <h2 className="sidebar-title">Menú</h2>
         <nav>
           <ul className="sidebar-links">
-            <li><a href="#inicio">Inicio</a></li>
-            <li><a href="#reservas">Reservas</a></li>
-            <li><a href="#habitaciones">Habitaciones</a></li>
-            <li><a href="#contacto">Contacto</a></li>
+            <li>
+              <button
+                type="button"
+                className={`sidebar-button ${activeSection === 'students' ? 'active' : ''}`}
+                onClick={() => handleSectionChange('students')}
+              >
+                Alumnos
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                className={`sidebar-button ${activeSection === 'shops' ? 'active' : ''}`}
+                onClick={() => handleSectionChange('shops')}
+              >
+                Tiendas
+              </button>
+            </li>
           </ul>
         </nav>
       </aside>
+
+      <main className="main-content">
+        {activeSection === 'students' && <StudentsView />}
+        {activeSection === 'shops' && <ShopsMapView />}
+      </main>
     </div>
   );
 }
