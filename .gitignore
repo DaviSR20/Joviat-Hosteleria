@@ -7,6 +7,8 @@
 /firebase.json
 *.cache
 hosting/.cache
+/firebaseApi.js
+/firebaseConfig.js
 
 # Firebase Functions
 /functions/node_modules/

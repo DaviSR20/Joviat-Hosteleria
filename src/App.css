@@ -12,6 +12,7 @@
   justify-content: center;
   position: relative;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  z-index: 1200;
 }
 
 .top-bar-logo {
@@ -31,30 +32,23 @@
   cursor: pointer;
 }
 
-.menu-toggle:hover {
-  background-color: rgba(255, 255, 255, 0.28);
-}
-
-.menu-toggle:focus-visible {
-  outline: 2px solid #ffffff;
-  outline-offset: 2px;
-}
-
 .left-sidebar {
   position: fixed;
-  top: 0; /* antes 88px */
+  top: 0;
   left: 0;
-  width: 250px;
+  width: 218px;
   max-width: 90vw;
-  height: 100vh; /* antes calc(...) */
+  height: 100vh;
   background-color: #2e3336;
   color: #ffffff;
-  padding: 110px 16px 24px; /* espacio arriba para no tapar el logo */
+  padding: 110px 16px 24px;
   transform: translateX(-100%);
   transition: transform 0.25s ease;
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2);
   overflow-y: auto;
+  z-index: 1100;
 }
+
 .left-sidebar.open {
   transform: translateX(0);
 }
@@ -73,16 +67,76 @@
   gap: 12px;
 }
 
-.sidebar-links a {
+.sidebar-button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: 8px;
+  background-color: #40464a;
   color: #ffffff;
-  text-decoration: none;
+  font-size: 17px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.sidebar-button.active {
+  background-color: #128a8f;
+}
+
+.main-content {
+  padding: 24px;
+}
+
+.students-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.student-card {
+  background-color: #ffffff;
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.student-card h2 {
+  margin: 10px 0 0;
   font-size: 18px;
 }
 
-.sidebar-links a:hover {
-  text-decoration: underline;
+.student-photo {
+  width: 100%;
+  height: 220px;
+  object-fit: cover;
+  border-radius: 8px;
 }
 
+.student-photo-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #777777;
+  background-color: #ececec;
+}
+
+.shops-map {
+  width: 100%;
+  height: 420px;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+.shops-map .leaflet-pane,
+.shops-map .leaflet-control {
+  z-index: 1;
+}
+
+.shops-list {
+  margin-top: 16px;
+}
 
 @media (min-width: 769px) {
   .App {
@@ -103,12 +157,6 @@
     max-height: 50px;
   }
 
-  .menu-toggle {
-    left: 14px;
-    padding: 7px 10px;
-    font-size: 24px;
-  }
-
   .left-sidebar {
     top: 74px;
     width: min(82vw, 320px);
@@ -116,47 +164,7 @@
     padding: 20px 14px;
   }
 
-  .sidebar-title {
-    font-size: 21px;
-  }
-
-  .sidebar-links a {
-    font-size: 17px;
-  }
-}
-
-@media (max-width: 480px) {
-  .top-bar {
-    height: 64px;
-  }
-
-  .top-bar-logo {
-    max-height: 40px;
-  }
-
-  .menu-toggle {
-    left: 10px;
-    padding: 6px 9px;
-    font-size: 21px;
-  }
-
-  .left-sidebar {
-    top: 64px;
-    width: 86vw;
-    height: calc(100vh - 64px);
-    padding: 18px 12px;
-  }
-
-  .sidebar-title {
-    margin-bottom: 12px;
-    font-size: 19px;
-  }
-
-  .sidebar-links {
-    gap: 10px;
-  }
-
-  .sidebar-links a {
-    font-size: 16px;
+  .main-content {
+    padding: 16px;
   }
 }
