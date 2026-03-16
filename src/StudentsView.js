@@ -1,10 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getStudents } from './firestoreApi';
 
 function StudentsView() {
   const [students, setStudents] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const filteredStudents = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+    if (!normalizedSearch) return students;
+
+    return students.filter((student) => student.name.toLowerCase().includes(normalizedSearch));
+  }, [students, searchTerm]);
 
   useEffect(() => {
     let isMounted = true;
@@ -40,8 +48,22 @@ function StudentsView() {
   return (
     <section>
       <h1>Alumnos</h1>
+      <div className="search-box">
+        <label htmlFor="students-search" className="search-label">Buscar alumno por nombre</label>
+        <input
+          id="students-search"
+          type="text"
+          className="search-input"
+          placeholder="Ej: Jordi"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.target.value)}
+        />
+      </div>
+
+      {filteredStudents.length === 0 && <p>No hay alumnos que coincidan con tu búsqueda.</p>}
+
       <div className="students-grid">
-        {students.map((student) => (
+        {filteredStudents.map((student) => (
           <article key={student.id} className="student-card">
             {student.photoUrl ? (
               <img src={student.photoUrl} alt={student.name} className="student-photo" />

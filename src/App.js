@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import './App.css';
 import logo from './logo_joviat.webp';
+import HomeView from './HomeView';
 import StudentsView from './StudentsView';
 import ShopsMapView from './ShopsMapView';
 
 function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [activeSection, setActiveSection] = useState('students');
+  const [activeSection, setActiveSection] = useState('home');
   const [isMobileView, setIsMobileView] = useState(() => window.innerWidth <= 768);
 
   useEffect(() => {
@@ -61,6 +62,15 @@ function App() {
             <li>
               <button
                 type="button"
+                className={`sidebar-button ${activeSection === 'home' ? 'active' : ''}`}
+                onClick={() => handleSectionChange('home')}
+              >
+                Inicio
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
                 className={`sidebar-button ${activeSection === 'students' ? 'active' : ''}`}
                 onClick={() => handleSectionChange('students')}
               >
@@ -81,6 +91,7 @@ function App() {
       </aside>
 
       <main className="main-content">
+        {activeSection === 'home' && <HomeView />}
         {activeSection === 'students' && <StudentsView />}
         {activeSection === 'shops' && <ShopsMapView />}
       </main>
