@@ -123,8 +123,8 @@ function ShopsMapView() {
 
   return (
     <section>
-      <h1>Tiendas</h1>
-      {loading && <p>Cargando tiendas...</p>}
+      <h1>Restaurants</h1>
+      {loading && <p>Cargando restaurants...</p>}
       {error && <p>{error}</p>}
       {!loading && !error && (
         <>
@@ -140,7 +140,7 @@ function ShopsMapView() {
             />
           </div>
 
-          <div className="shops-view-toggle" role="tablist" aria-label="Modo de visualización de tiendas">
+          <div className="shops-view-toggle" role="tablist" aria-label="Modo de visualización de Restaurants">
             <button
               type="button"
               className={`shops-view-button ${viewMode === 'map' ? 'active' : ''}`}
@@ -157,7 +157,7 @@ function ShopsMapView() {
             </button>
           </div>
 
-          {filteredRestaurants.length === 0 && <p>No hay tiendas que coincidan con tu búsqueda.</p>}
+          {filteredRestaurants.length === 0 && <p>No hay Restaurantes que coincidan con tu búsqueda.</p>}
 
           {viewMode === 'map' && filteredRestaurants.length > 0 && <div ref={mapContainerRef} className="shops-map" />}
 

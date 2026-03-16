@@ -36,7 +36,7 @@
   position: fixed;
   top: 0;
   left: 0;
-  width: 250px;
+  width: 218px;
   max-width: 90vw;
   height: 100vh;
   background-color: #2e3336;
@@ -147,7 +147,7 @@
 
 .search-input {
   width: 100%;
-  max-width: 460px;
+  max-width: 335px;
   border: 1px solid #c9d1d4;
   border-radius: 8px;
   padding: 10px 12px;
