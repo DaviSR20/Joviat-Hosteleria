@@ -9,6 +9,16 @@ const getFieldValue = (field) => {
   if (field.doubleValue !== undefined) return field.doubleValue;
   if (field.booleanValue !== undefined) return field.booleanValue;
   if (field.geoPointValue !== undefined) return field.geoPointValue;
+  if (field.arrayValue !== undefined) {
+    const values = field.arrayValue.values || [];
+    return values.map(getFieldValue);
+  }
+  if (field.mapValue !== undefined) {
+    const mapFields = field.mapValue.fields || {};
+    return Object.fromEntries(
+      Object.entries(mapFields).map(([key, value]) => [key, getFieldValue(value)])
+    );
+  }
   return null;
 };
 
@@ -36,25 +46,62 @@ const fetchCollection = async (collectionName) => {
 export const getStudents = async () => {
   const documents = await fetchCollection('Alumni');
 
-  return documents.map(({ id, fields }) => ({
-    id,
-    name: getFieldValue(fields.Name) || 'Sin nombre',
-    photoUrl: getFieldValue(fields.PhotoURL) || '',
-  }));
+  return documents.map(({ id, fields }) => {
+    const details = Object.fromEntries(
+      Object.entries(fields || {}).map(([key, value]) => [key, getFieldValue(value)])
+    );
+
+    return {
+      id,
+      name: details.Name || details.name || 'Sin nombre',
+      photoUrl: details.PhotoURL || details.PhotoUrl || details.photoUrl || '',
+      details,
+    };
+  });
 };
 
 export const getRestaurants = async () => {
   const documents = await fetchCollection('Restaurant');
 
-  return documents
-    .map(({ id, fields }) => {
-      const location = getFieldValue(fields.Location);
-      return {
-        id,
-        name: getFieldValue(fields.Name) || 'Sin nombre',
-        lat: location?.latitude,
-        lng: location?.longitude,
-      };
-    })
-    .filter((restaurant) => typeof restaurant.lat === 'number' && typeof restaurant.lng === 'number');
+  return documents.map(({ id, fields }) => {
+    const details = Object.fromEntries(
+      Object.entries(fields || {}).map(([key, value]) => [key, getFieldValue(value)])
+    );
+    const location = details.Location;
+    return {
+      id,
+      name: details.Name || details.name || 'Sin nombre',
+      photoUrl: details.PhotoURL || details.PhotoUrl || details.photoUrl || '',
+      address: details.Address || details.address || '',
+      email: details.Email || details.email || '',
+      phone: details.Phone || details.phone || '',
+      lat: location?.latitude,
+      lng: location?.longitude,
+      details,
+    };
+  });
+};
+
+export const getRestAlum = async () => {
+  const documents = await fetchCollection('Rest-Alum');
+
+  const normalizeId = (value) => {
+    if (value === null || value === undefined) return '';
+    return String(value).trim();
+  };
+
+  return documents.map(({ id, fields }) => {
+    const details = Object.fromEntries(
+      Object.entries(fields || {}).map(([key, value]) => [key, getFieldValue(value)])
+    );
+
+    return {
+      id,
+      alumniId: normalizeId(details.id_alumni || details.idAlumni || details.alumniId || ''),
+      restaurantId: normalizeId(details.id_restaurant || details.idRestaurant || details.restaurantId || ''),
+      role: details.rol || details.role || '',
+      currentJob: details.current_job ?? details.currentJob ?? null,
+      details,
+    };
+  });
 };

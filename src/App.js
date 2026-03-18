@@ -9,6 +9,8 @@ function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState('home');
   const [isMobileView, setIsMobileView] = useState(() => window.innerWidth <= 768);
+  const [selectedStudentId, setSelectedStudentId] = useState(null);
+  const [selectedRestaurantId, setSelectedRestaurantId] = useState(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -31,6 +33,16 @@ function App() {
     if (isMobileView) {
       setIsMenuOpen(false);
     }
+  };
+
+  const openStudentProfile = (studentId) => {
+    setSelectedStudentId(studentId);
+    handleSectionChange('students');
+  };
+
+  const openRestaurantProfile = (restaurantId) => {
+    setSelectedRestaurantId(restaurantId);
+    handleSectionChange('shops');
   };
 
   return (
@@ -92,8 +104,20 @@ function App() {
 
       <main className="main-content">
         {activeSection === 'home' && <HomeView />}
-        {activeSection === 'students' && <StudentsView />}
-        {activeSection === 'shops' && <ShopsMapView />}
+        {activeSection === 'students' && (
+          <StudentsView
+            selectedStudentId={selectedStudentId}
+            onSelectStudent={setSelectedStudentId}
+            onOpenRestaurant={openRestaurantProfile}
+          />
+        )}
+        {activeSection === 'shops' && (
+          <ShopsMapView
+            selectedRestaurantId={selectedRestaurantId}
+            onSelectRestaurant={setSelectedRestaurantId}
+            onOpenStudent={openStudentProfile}
+          />
+        )}
       </main>
     </div>
   );
