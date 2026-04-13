@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getRestAlum, getRestaurants, getStudents } from './firestoreApi';
+import { createRestAlum, getRestAlum, getRestaurants, getStudents } from './firestoreApi';
 
-function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent, onOpenRestaurant }) {
+function StudentsView({
+  selectedStudentId: controlledStudentId,
+  onSelectStudent,
+  onOpenRestaurant,
+  onBack,
+  isAdmin = false,
+  reloadToken = 0,
+}) {
   const [students, setStudents] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
   const [restAlum, setRestAlum] = useState([]);
@@ -9,6 +16,11 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [internalSelectedStudentId, setInternalSelectedStudentId] = useState(null);
+  const [relationRestaurantId, setRelationRestaurantId] = useState('');
+  const [relationRole, setRelationRole] = useState('');
+  const [relationCurrentJob, setRelationCurrentJob] = useState(false);
+  const [relationError, setRelationError] = useState('');
+  const [relationLoading, setRelationLoading] = useState(false);
 
   const isControlled = controlledStudentId !== undefined;
   const selectedStudentId = isControlled ? controlledStudentId : internalSelectedStudentId;
@@ -21,10 +33,30 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
     return students.filter((student) => student.name.toLowerCase().includes(normalizedSearch));
   }, [students, searchTerm]);
 
-  const selectedStudent = useMemo(
-    () => students.find((student) => student.id === selectedStudentId) || null,
-    [students, selectedStudentId]
-  );
+  const selectedStudent = useMemo(() => {
+    if (!selectedStudentId) return null;
+    const matchId = `${selectedStudentId}`.trim();
+    return (
+      students.find((student) => {
+        const details = student.details || {};
+        const candidates = [
+          student.id,
+          details.id,
+          details.Id,
+          details.ID,
+          details.id_alumni,
+          details.idAlumni,
+          details.alumniId,
+          details.uid,
+          details.uid_alumni,
+          details.uidAlumni,
+        ];
+        return candidates.some(
+          (value) => value !== null && value !== undefined && `${value}`.trim() === matchId
+        );
+      }) || null
+    );
+  }, [students, selectedStudentId]);
 
   const selectedStudentMatchIds = useMemo(() => {
     if (!selectedStudent) return new Set();
@@ -79,11 +111,18 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
 
   useEffect(() => {
     if (!selectedStudentId) return;
+    if (!searchTerm.trim()) return;
     const stillVisible = filteredStudents.some((student) => student.id === selectedStudentId);
     if (!stillVisible) {
       setSelectedStudentId(null);
     }
-  }, [filteredStudents, selectedStudentId]);
+  }, [filteredStudents, searchTerm, selectedStudentId]);
+
+  useEffect(() => {
+    if (selectedStudentId) {
+      setSearchTerm('');
+    }
+  }, [selectedStudentId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -117,7 +156,7 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [reloadToken]);
 
   const formatDetailValue = (value) => {
     if (value === null || value === undefined || value === '') return '-';
@@ -129,6 +168,44 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
       return JSON.stringify(value);
     }
     return String(value);
+  };
+
+  const formatYesNo = (value) => {
+    if (value === null || value === undefined || value === '') return '-';
+    if (typeof value === 'boolean') return value ? 'Si' : 'No';
+    if (value === 'true' || value === 'false') return value === 'true' ? 'Si' : 'No';
+    return String(value);
+  };
+
+  const formatDetailEntryValue = (label, value) => {
+    if (label === 'Alumni') {
+      return formatYesNo(value);
+    }
+    return formatDetailValue(value);
+  };
+
+  const normalizeUrl = (value) => {
+    if (value === null || value === undefined) return '';
+    const trimmed = String(value).trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+    return `https://${trimmed}`;
+  };
+
+  const renderDetailValue = (label, value) => {
+    const formatted = formatDetailEntryValue(label, value);
+    if (label.toLowerCase().includes('linkedin') && formatted !== '-') {
+      const url = normalizeUrl(formatted);
+      if (!url) return formatted;
+      return (
+        <a href={url} target="_blank" rel="noreferrer">
+          {formatted}
+        </a>
+      );
+    }
+    return formatted;
   };
 
   const detailEntries = useMemo(() => {
@@ -160,6 +237,58 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
     return [...orderedEntries, ...remainingEntries];
   }, [selectedStudent]);
 
+  const sortedRestaurants = useMemo(
+    () => [...restaurants].sort((a, b) => a.name.localeCompare(b.name)),
+    [restaurants]
+  );
+
+  const handleAddRelation = async () => {
+    if (!selectedStudent) return;
+    if (!relationRestaurantId) {
+      setRelationError('Selecciona una tienda.');
+      return;
+    }
+
+    setRelationError('');
+    setRelationLoading(true);
+
+    try {
+      const created = await createRestAlum({
+        alumniId: selectedStudent.id,
+        restaurantId: relationRestaurantId,
+        role: relationRole.trim(),
+        currentJob: relationCurrentJob,
+      });
+
+      setRestAlum((current) => [
+        ...current,
+        {
+          id: created.id,
+          alumniId: selectedStudent.id,
+          restaurantId: relationRestaurantId,
+          role: relationRole.trim(),
+          currentJob: relationCurrentJob,
+          details: created.fields || {},
+        },
+      ]);
+      setRelationRestaurantId('');
+      setRelationRole('');
+      setRelationCurrentJob(false);
+    } catch (relationErr) {
+      setRelationError(relationErr.message || 'No se pudo guardar la relacion.');
+    } finally {
+      setRelationLoading(false);
+    }
+  };
+
+  const handleBack = () => {
+    if (onBack) {
+      onBack();
+      return;
+    }
+    setSelectedStudentId(null);
+  };
+
   if (loading) return <p>Cargando alumnos...</p>;
   if (error) return <p>{error}</p>;
 
@@ -172,7 +301,7 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
             <button
               type="button"
               className="student-back-button"
-              onClick={() => setSelectedStudentId(null)}
+              onClick={handleBack}
             >
               Volver
             </button>
@@ -199,7 +328,7 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
               {detailEntries.map(([key, value]) => (
                 <div key={key} className="student-details-row">
                   <dt>{key}</dt>
-                  <dd>{formatDetailValue(value)}</dd>
+                  <dd>{renderDetailValue(key, value)}</dd>
                 </div>
               ))}
             </dl>
@@ -231,7 +360,7 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
                         </p>
                         <p className="related-meta">Rol: {relation.role || '-'}</p>
                         <p className="related-meta">
-                          Actual: {formatDetailValue(relation.currentJob)}
+                          Actual: {formatYesNo(relation.currentJob)}
                         </p>
                       </button>
                     </li>
@@ -242,6 +371,52 @@ function StudentsView({ selectedStudentId: controlledStudentId, onSelectStudent,
               <p>No hay restaurantes asociados.</p>
             )}
           </div>
+          {isAdmin && (
+            <div className="related-section">
+              <h3>Anadir relacion</h3>
+              <label className="search-label" htmlFor="relation-restaurant">
+                Tienda
+              </label>
+              <select
+                id="relation-restaurant"
+                className="search-input"
+                value={relationRestaurantId}
+                onChange={(event) => setRelationRestaurantId(event.target.value)}
+              >
+                <option value="">Selecciona una tienda</option>
+                {sortedRestaurants.map((restaurant) => (
+                  <option key={restaurant.id} value={restaurant.id}>
+                    {restaurant.name}
+                  </option>
+                ))}
+              </select>
+              <label className="search-label" htmlFor="relation-role">Rol</label>
+              <input
+                id="relation-role"
+                className="search-input"
+                type="text"
+                value={relationRole}
+                onChange={(event) => setRelationRole(event.target.value)}
+              />
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={relationCurrentJob}
+                  onChange={(event) => setRelationCurrentJob(event.target.checked)}
+                />
+                Trabajo actual
+              </label>
+              {relationError && <p className="auth-error">{relationError}</p>}
+              <button
+                type="button"
+                className="auth-submit"
+                onClick={handleAddRelation}
+                disabled={relationLoading}
+              >
+                {relationLoading ? 'Guardando...' : 'Guardar relacion'}
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <>

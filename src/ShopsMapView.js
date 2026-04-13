@@ -34,7 +34,13 @@ const loadLeafletAssets = async () => {
   });
 };
 
-function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRestaurant, onOpenStudent }) {
+function ShopsMapView({
+  selectedRestaurantId: controlledRestaurantId,
+  onSelectRestaurant,
+  onOpenStudent,
+  onBack,
+  reloadToken = 0,
+}) {
   const [restaurants, setRestaurants] = useState([]);
   const [students, setStudents] = useState([]);
   const [restAlum, setRestAlum] = useState([]);
@@ -43,9 +49,13 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
   const [viewMode, setViewMode] = useState('map');
   const [searchTerm, setSearchTerm] = useState('');
   const [internalSelectedRestaurantId, setInternalSelectedRestaurantId] = useState(null);
+  const [mapReady, setMapReady] = useState(false);
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersLayerRef = useRef(null);
+  const detailMapRef = useRef(null);
+  const detailMapInstanceRef = useRef(null);
+  const detailMarkerRef = useRef(null);
 
   const isControlled = controlledRestaurantId !== undefined;
   const selectedRestaurantId = isControlled ? controlledRestaurantId : internalSelectedRestaurantId;
@@ -58,10 +68,36 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
     return restaurants.filter((restaurant) => restaurant.name.toLowerCase().includes(normalizedSearch));
   }, [restaurants, searchTerm]);
 
-  const selectedRestaurant = useMemo(
-    () => restaurants.find((restaurant) => restaurant.id === selectedRestaurantId) || null,
-    [restaurants, selectedRestaurantId]
-  );
+  const selectedRestaurant = useMemo(() => {
+    if (!selectedRestaurantId) return null;
+    const matchId = `${selectedRestaurantId}`.trim();
+    return (
+      restaurants.find((restaurant) => {
+        const details = restaurant.details || {};
+        const candidates = [
+          restaurant.id,
+          details.id,
+          details.Id,
+          details.ID,
+          details.id_restaurant,
+          details.idRestaurant,
+          details.restaurantId,
+          details.uid,
+          details.uid_restaurant,
+          details.uidRestaurant,
+        ];
+        return candidates.some(
+          (value) => value !== null && value !== undefined && `${value}`.trim() === matchId
+        );
+      }) || null
+    );
+  }, [restaurants, selectedRestaurantId]);
+
+  useEffect(() => {
+    if (selectedRestaurantId) {
+      setSearchTerm('');
+    }
+  }, [selectedRestaurantId]);
 
   const selectedRestaurantMatchIds = useMemo(() => {
     if (!selectedRestaurant) return new Set();
@@ -103,6 +139,52 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
     });
     return map;
   }, [students]);
+
+  const restaurantRelationCounts = useMemo(() => {
+    const counts = new Map();
+    restAlum.forEach((relation) => {
+      if (!relation.restaurantId) return;
+      const key = `${relation.restaurantId}`.trim();
+      if (!key) return;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return counts;
+  }, [restAlum]);
+
+  const getRestaurantMatchIds = (restaurant) => {
+    const details = restaurant.details || {};
+    const candidates = [
+      restaurant.id,
+      details.id,
+      details.Id,
+      details.ID,
+      details.id_restaurant,
+      details.idRestaurant,
+      details.restaurantId,
+      details.uid,
+      details.uid_restaurant,
+      details.uidRestaurant,
+    ];
+    return candidates
+      .filter((value) => value !== null && value !== undefined && `${value}`.trim())
+      .map((value) => `${value}`.trim());
+  };
+
+  const alumniCountByRestaurant = useMemo(() => {
+    const counts = new Map();
+    restaurants.forEach((restaurant) => {
+      const ids = getRestaurantMatchIds(restaurant);
+      const seen = new Set();
+      let total = 0;
+      ids.forEach((id) => {
+        if (seen.has(id)) return;
+        seen.add(id);
+        total += restaurantRelationCounts.get(id) || 0;
+      });
+      counts.set(restaurant.id, total);
+    });
+    return counts;
+  }, [restaurants, restaurantRelationCounts]);
 
   const relatedAlumni = useMemo(() => {
     if (!selectedRestaurantId) return [];
@@ -146,12 +228,13 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [reloadToken]);
 
   useEffect(() => {
     let cancelled = false;
 
     const initializeMap = async () => {
+      if (selectedRestaurantId) return;
       if (!mapContainerRef.current || loading || error) return;
 
       try {
@@ -165,6 +248,7 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
 
         markersLayerRef.current = window.L.layerGroup().addTo(map);
         mapInstanceRef.current = map;
+        setMapReady(true);
       } catch {
         if (!cancelled) {
           setError('No se pudo cargar el mapa.');
@@ -177,13 +261,23 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
     return () => {
       cancelled = true;
     };
-  }, [loading, error]);
+  }, [loading, error, selectedRestaurantId]);
+
+  useEffect(() => {
+    if (!selectedRestaurantId) return;
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+      markersLayerRef.current = null;
+      setMapReady(false);
+    }
+  }, [selectedRestaurantId]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
     const markersLayer = markersLayerRef.current;
 
-    if (!map || !markersLayer) return;
+    if (!map || !markersLayer || !mapReady) return;
 
     markersLayer.clearLayers();
 
@@ -198,13 +292,14 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
     if (viewMode === 'map') {
       map.invalidateSize();
     }
-  }, [filteredRestaurants, viewMode]);
+  }, [filteredRestaurants, viewMode, mapReady]);
 
   useEffect(() => () => {
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
       markersLayerRef.current = null;
+      setMapReady(false);
     }
   }, []);
 
@@ -220,11 +315,34 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
     return String(value);
   };
 
+  const formatYesNo = (value) => {
+    if (value === null || value === undefined || value === '') return '-';
+    if (typeof value === 'boolean') return value ? 'Si' : 'No';
+    if (value === 'true' || value === 'false') return value === 'true' ? 'Si' : 'No';
+    return String(value);
+  };
+
   const detailEntries = useMemo(() => {
     if (!selectedRestaurant?.details) return [];
     const details = selectedRestaurant.details;
     const usedKeys = new Set();
-    const hiddenKeys = new Set(['PhotoURL', 'PhotoUrl', 'photoUrl']);
+    const hiddenKeys = new Set([
+      'PhotoURL',
+      'PhotoUrl',
+      'photoUrl',
+      'Lat',
+      'lat',
+      'Latitude',
+      'latitude',
+      'Latitud',
+      'latitud',
+      'Lng',
+      'lng',
+      'Longitude',
+      'longitude',
+      'Longitud',
+      'longitud',
+    ]);
 
     const orderedFields = [
       { label: 'Nombre', keys: ['Name', 'name'] },
@@ -249,6 +367,112 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
     return [...orderedEntries, ...remainingEntries];
   }, [selectedRestaurant]);
 
+  const getRestaurantCoordinates = (restaurant) => {
+    if (!restaurant) return null;
+    if (Number.isFinite(restaurant.lat) && Number.isFinite(restaurant.lng)) {
+      return { lat: restaurant.lat, lng: restaurant.lng };
+    }
+    if (Number.isFinite(restaurant.latitude) && Number.isFinite(restaurant.longitude)) {
+      return { lat: restaurant.latitude, lng: restaurant.longitude };
+    }
+    const details = restaurant.details || {};
+    const latCandidate =
+      details.lat ??
+      details.Lat ??
+      details.latitude ??
+      details.Latitude ??
+      details.latitud ??
+      details.Latitud;
+    const lngCandidate =
+      details.lng ??
+      details.Lng ??
+      details.longitude ??
+      details.Longitude ??
+      details.longitud ??
+      details.Longitud;
+    const lat = Number(latCandidate);
+    const lng = Number(lngCandidate);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat, lng };
+    }
+    return null;
+  };
+
+  const selectedRestaurantCoords = useMemo(
+    () => getRestaurantCoordinates(selectedRestaurant),
+    [selectedRestaurant]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initDetailMap = async () => {
+      if (!selectedRestaurant || !selectedRestaurantCoords) return;
+      if (!detailMapRef.current) return;
+
+      try {
+        await loadLeafletAssets();
+        if (cancelled || !window.L || !detailMapRef.current) return;
+
+        const { lat, lng } = selectedRestaurantCoords;
+        let map = detailMapInstanceRef.current;
+
+        if (!map) {
+          map = window.L.map(detailMapRef.current).setView([lat, lng], 15);
+          window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+          }).addTo(map);
+          detailMapInstanceRef.current = map;
+        } else {
+          map.setView([lat, lng], 15);
+        }
+
+        if (!detailMarkerRef.current) {
+          detailMarkerRef.current = window.L.marker([lat, lng]).addTo(map);
+        } else {
+          detailMarkerRef.current.setLatLng([lat, lng]);
+        }
+
+        setTimeout(() => {
+          map.invalidateSize();
+        }, 0);
+      } catch {
+        // Silently fail to avoid blocking the detail view.
+      }
+    };
+
+    initDetailMap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRestaurant, selectedRestaurantCoords]);
+
+  useEffect(() => {
+    if (selectedRestaurantId) return;
+    if (detailMapInstanceRef.current) {
+      detailMapInstanceRef.current.remove();
+      detailMapInstanceRef.current = null;
+      detailMarkerRef.current = null;
+    }
+  }, [selectedRestaurantId]);
+
+  useEffect(() => () => {
+    if (detailMapInstanceRef.current) {
+      detailMapInstanceRef.current.remove();
+      detailMapInstanceRef.current = null;
+      detailMarkerRef.current = null;
+    }
+  }, []);
+
+  const handleBack = () => {
+    if (onBack) {
+      onBack();
+      return;
+    }
+    setSelectedRestaurantId(null);
+  };
+
   if (loading) return <p>Cargando tiendas...</p>;
   if (error) return <p>{error}</p>;
 
@@ -261,29 +485,29 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
             <button
               type="button"
               className="student-back-button"
-              onClick={() => setSelectedRestaurantId(null)}
+              onClick={handleBack}
             >
               Volver
             </button>
           </div>
           <h2>Detalle del restaurante</h2>
-          <div className="student-details-header">
-            {selectedRestaurant.photoUrl ? (
-              <img
-                src={selectedRestaurant.photoUrl}
-                alt={selectedRestaurant.name}
-                className="student-details-photo"
-              />
-            ) : (
-              <div className="student-details-photo student-photo-placeholder">
-                Sin imagen
-              </div>
-            )}
-            <div>
-              <p className="student-details-name">{selectedRestaurant.name}</p>
-              <p className="student-details-id">ID: {selectedRestaurant.id}</p>
+        <div className="student-details-header">
+          {selectedRestaurant.photoUrl ? (
+            <img
+              src={selectedRestaurant.photoUrl}
+              alt={selectedRestaurant.name}
+              className="student-details-photo"
+            />
+          ) : (
+            <div className="student-details-photo student-photo-placeholder">
+              Sin imagen
             </div>
+          )}
+          <div>
+            <p className="student-details-name">{selectedRestaurant.name}</p>
+            <p className="shop-card-meta">Alumnos asociados: {relatedAlumni.length}</p>
           </div>
+        </div>
           {detailEntries.length > 0 ? (
             <dl className="student-details-list">
               {detailEntries.map(([key, value]) => (
@@ -296,6 +520,14 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
           ) : (
             <p>No hay detalles disponibles.</p>
           )}
+          <div className="shop-detail-map-section">
+            <h3>Ubicacion</h3>
+            {selectedRestaurantCoords ? (
+              <div className="shop-detail-map" ref={detailMapRef} />
+            ) : (
+              <p className="shop-detail-map-empty">Ubicacion no disponible.</p>
+            )}
+          </div>
           <div className="related-section">
             <h3>Alumnos</h3>
             {relatedAlumni.length > 0 ? (
@@ -321,7 +553,7 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
                         </p>
                         <p className="related-meta">Rol: {relation.role || '-'}</p>
                         <p className="related-meta">
-                          Actual: {formatDetailValue(relation.currentJob)}
+                          Actual: {formatYesNo(relation.currentJob)}
                         </p>
                       </button>
                     </li>
@@ -391,15 +623,19 @@ function ShopsMapView({ selectedRestaurantId: controlledRestaurantId, onSelectRe
                   className="shop-card shop-card-button"
                   onClick={() => setSelectedRestaurantId(restaurant.id)}
                 >
-                  <h2>{restaurant.name}</h2>
-                  {typeof restaurant.lat === 'number' && typeof restaurant.lng === 'number' ? (
-                    <>
-                      <p>Latitud: {restaurant.lat.toFixed(5)}</p>
-                      <p>Longitud: {restaurant.lng.toFixed(5)}</p>
-                    </>
+                  {restaurant.photoUrl ? (
+                    <img
+                      src={restaurant.photoUrl}
+                      alt={restaurant.name}
+                      className="shop-photo"
+                    />
                   ) : (
-                    <p>Sin coordenadas</p>
+                    <div className="shop-photo shop-photo-placeholder">Sin imagen</div>
                   )}
+                  <h2>{restaurant.name}</h2>
+                  <p className="shop-card-meta">
+                    Alumnos: {alumniCountByRestaurant.get(restaurant.id) || 0}
+                  </p>
                 </button>
               ))}
             </div>
