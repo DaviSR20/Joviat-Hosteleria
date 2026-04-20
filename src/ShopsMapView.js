@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import defaultRestaurant from './Imatges/default-restaurant.jpg';
 import { getRestAlum, getRestaurants, getStudents } from './firestoreApi';
 
 const BARCELONA_CENTER = [41.3874, 2.1686];
@@ -39,6 +40,8 @@ function ShopsMapView({
   onSelectRestaurant,
   onOpenStudent,
   onBack,
+  onEditRestaurant,
+  isAdmin = false,
   reloadToken = 0,
 }) {
   const [restaurants, setRestaurants] = useState([]);
@@ -489,25 +492,28 @@ function ShopsMapView({
             >
               Volver
             </button>
+            {isAdmin && onEditRestaurant && (
+              <button
+                type="button"
+                className="student-edit-button"
+                onClick={() => onEditRestaurant(selectedRestaurant)}
+              >
+                Editar
+              </button>
+            )}
           </div>
           <h2>Detalle del restaurante</h2>
-        <div className="student-details-header">
-          {selectedRestaurant.photoUrl ? (
+          <div className="student-details-header">
             <img
-              src={selectedRestaurant.photoUrl}
+              src={selectedRestaurant.photoUrl || defaultRestaurant}
               alt={selectedRestaurant.name}
               className="student-details-photo"
             />
-          ) : (
-            <div className="student-details-photo student-photo-placeholder">
-              Sin imagen
+            <div>
+              <p className="student-details-name">{selectedRestaurant.name}</p>
+              <p className="shop-card-meta">Alumnos asociados: {relatedAlumni.length}</p>
             </div>
-          )}
-          <div>
-            <p className="student-details-name">{selectedRestaurant.name}</p>
-            <p className="shop-card-meta">Alumnos asociados: {relatedAlumni.length}</p>
           </div>
-        </div>
           {detailEntries.length > 0 ? (
             <dl className="student-details-list">
               {detailEntries.map(([key, value]) => (
@@ -623,15 +629,11 @@ function ShopsMapView({
                   className="shop-card shop-card-button"
                   onClick={() => setSelectedRestaurantId(restaurant.id)}
                 >
-                  {restaurant.photoUrl ? (
-                    <img
-                      src={restaurant.photoUrl}
-                      alt={restaurant.name}
-                      className="shop-photo"
-                    />
-                  ) : (
-                    <div className="shop-photo shop-photo-placeholder">Sin imagen</div>
-                  )}
+                  <img
+                    src={restaurant.photoUrl || defaultRestaurant}
+                    alt={restaurant.name}
+                    className="shop-photo"
+                  />
                   <h2>{restaurant.name}</h2>
                   <p className="shop-card-meta">
                     Alumnos: {alumniCountByRestaurant.get(restaurant.id) || 0}

@@ -9,11 +9,16 @@ import {
   createRestAlum,
   createRestaurant,
   createStudent,
+  deleteRestAlum,
   getRestaurants,
   isAdminEmail,
+  updateRestAlum,
+  updateRestaurant,
+  updateStudent,
 } from './firestoreApi';
 
 const BARCELONA_CENTER = [41.3874, 2.1686];
+const GOOGLE_MAPS_API_KEY = (process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '').trim();
 
 const loadLeafletAssets = async () => {
   if (window.L) return;
@@ -46,6 +51,33 @@ const loadLeafletAssets = async () => {
   });
 };
 
+const loadGooglePlacesAssets = async () => {
+  if (!GOOGLE_MAPS_API_KEY) {
+    throw new Error('Falta la API key de Google Maps.');
+  }
+
+  if (window.google && window.google.maps && window.google.maps.places) return;
+
+  await new Promise((resolve, reject) => {
+    const existingScript = document.querySelector('script[data-google-maps]');
+
+    if (existingScript) {
+      existingScript.addEventListener('load', resolve, { once: true });
+      existingScript.addEventListener('error', reject, { once: true });
+      return;
+    }
+
+    const googleScript = document.createElement('script');
+    googleScript.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`;
+    googleScript.setAttribute('data-google-maps', 'true');
+    googleScript.async = true;
+    googleScript.defer = true;
+    googleScript.onload = resolve;
+    googleScript.onerror = reject;
+    document.body.appendChild(googleScript);
+  });
+};
+
 function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isMobileView, setIsMobileView] = useState(() => window.innerWidth <= 768);
@@ -64,10 +96,13 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const [adminModalType, setAdminModalType] = useState('student');
+  const [adminMode, setAdminMode] = useState('create');
   const [adminError, setAdminError] = useState('');
   const [adminLoading, setAdminLoading] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [adminView, setAdminView] = useState(null);
+  const [editingStudentId, setEditingStudentId] = useState(null);
+  const [editingRestaurantId, setEditingRestaurantId] = useState(null);
 
   const [newStudentName, setNewStudentName] = useState('');
   const [newStudentEmail, setNewStudentEmail] = useState('');
@@ -78,8 +113,9 @@ function App() {
   const [newStudentPassword, setNewStudentPassword] = useState('');
   const [newStudentPasswordConfirm, setNewStudentPasswordConfirm] = useState('');
   const [newStudentRelations, setNewStudentRelations] = useState([
-    { restaurantId: '', role: '', currentJob: false },
+    { restaurantId: '', role: '', currentJob: false, isExisting: false },
   ]);
+  const [deletedRelationIds, setDeletedRelationIds] = useState([]);
   const [restaurantsOptions, setRestaurantsOptions] = useState([]);
 
   const [newRestaurantName, setNewRestaurantName] = useState('');
@@ -89,12 +125,20 @@ function App() {
   const [newRestaurantPhoto, setNewRestaurantPhoto] = useState('');
   const [newRestaurantLat, setNewRestaurantLat] = useState('');
   const [newRestaurantLng, setNewRestaurantLng] = useState('');
+  const [restaurantApiQuery, setRestaurantApiQuery] = useState('');
+  const [restaurantApiResults, setRestaurantApiResults] = useState([]);
+  const [restaurantApiSelectedId, setRestaurantApiSelectedId] = useState('');
+  const [restaurantApiError, setRestaurantApiError] = useState('');
+  const [restaurantApiLoading, setRestaurantApiLoading] = useState(false);
+  const [restaurantApiDetails, setRestaurantApiDetails] = useState(null);
+  const [restaurantApiDetailsLoading, setRestaurantApiDetailsLoading] = useState(false);
   const [restaurantSearchTerm, setRestaurantSearchTerm] = useState('');
   const [restaurantSearchError, setRestaurantSearchError] = useState('');
   const [restaurantSearchLoading, setRestaurantSearchLoading] = useState(false);
   const adminMapRef = useRef(null);
   const adminMapInstanceRef = useRef(null);
   const adminMarkerRef = useRef(null);
+  const placesServiceRef = useRef(null);
   const currentView = viewStack[viewStack.length - 1];
   const activeSection = currentView.section;
   const selectedStudentId = currentView.selectedStudentId;
@@ -264,6 +308,16 @@ function App() {
     });
   };
 
+  const handleEditStudent = (student, relations = []) => {
+    if (!student) return;
+    openAdminModal('student', { mode: 'edit', student, relations });
+  };
+
+  const handleEditRestaurant = (restaurant) => {
+    if (!restaurant) return;
+    openAdminModal('restaurant', { mode: 'edit', restaurant });
+  };
+
   const handleAuthCheck = async () => {
     const normalizedEmail = authEmail.trim().toLowerCase();
     if (!normalizedEmail) {
@@ -313,27 +367,274 @@ function App() {
     setIsAdmin(false);
   };
 
-  const openAdminModal = (type) => {
+  const getDetailValue = (details, keys, fallback = '') => {
+    for (const key of keys) {
+      if (details && details[key] !== null && details[key] !== undefined && `${details[key]}` !== '') {
+        return details[key];
+      }
+    }
+    return fallback;
+  };
+
+  const normalizePhoneList = (value) => {
+    if (Array.isArray(value)) {
+      const cleaned = value.map((phone) => String(phone).trim()).filter(Boolean);
+      return cleaned.length ? cleaned : [''];
+    }
+    if (value !== null && value !== undefined && `${value}`.trim()) {
+      return [String(value).trim()];
+    }
+    return [''];
+  };
+
+  const normalizeBoolean = (value, fallback = true) => {
+    if (typeof value === 'boolean') return value;
+    if (value === 'true' || value === 'false') return value === 'true';
+    return fallback;
+  };
+
+  const ensurePlacesService = async () => {
+    await loadGooglePlacesAssets();
+    if (!placesServiceRef.current) {
+      const container = document.createElement('div');
+      placesServiceRef.current = new window.google.maps.places.PlacesService(container);
+    }
+    return placesServiceRef.current;
+  };
+
+  const runPlacesTextSearch = async (query) => {
+    const service = await ensurePlacesService();
+    return new Promise((resolve, reject) => {
+      service.textSearch({ query, type: 'restaurant' }, (results, status) => {
+        const statusOk = window.google?.maps?.places?.PlacesServiceStatus?.OK;
+        const statusZero = window.google?.maps?.places?.PlacesServiceStatus?.ZERO_RESULTS;
+        if (status === statusOk) {
+          resolve(results || []);
+          return;
+        }
+        if (status === statusZero) {
+          resolve([]);
+          return;
+        }
+        reject(new Error('No se pudo buscar en la API.'));
+      });
+    });
+  };
+
+  const runPlaceDetails = async (placeId) => {
+    const service = await ensurePlacesService();
+    return new Promise((resolve, reject) => {
+      service.getDetails(
+        {
+          placeId,
+          fields: [
+            'name',
+            'formatted_address',
+            'formatted_phone_number',
+            'international_phone_number',
+            'geometry',
+            'photos',
+          ],
+        },
+        (place, status) => {
+          const statusOk = window.google?.maps?.places?.PlacesServiceStatus?.OK;
+          if (status === statusOk) {
+            resolve(place);
+            return;
+          }
+          reject(new Error('No se pudo cargar el detalle del restaurante.'));
+        }
+      );
+    });
+  };
+
+  const handleRestaurantApiSearch = async () => {
+    const query = restaurantApiQuery.trim();
+    if (!query) {
+      setRestaurantApiError('Introduce un nombre para buscar.');
+      return;
+    }
+
+    setRestaurantApiError('');
+    setRestaurantApiLoading(true);
+
+    try {
+      const results = await runPlacesTextSearch(query);
+      const mapped = results.map((place) => ({
+        id: place.place_id,
+        name: place.name || 'Sin nombre',
+        address: place.formatted_address || place.vicinity || '',
+      }));
+      setRestaurantApiResults(mapped);
+      setRestaurantApiSelectedId('');
+      setRestaurantApiDetails(null);
+      if (!mapped.length) {
+        setRestaurantApiError('No se encontraron resultados.');
+      }
+    } catch (apiError) {
+      setRestaurantApiError(apiError.message || 'No se pudo buscar en la API.');
+    } finally {
+      setRestaurantApiLoading(false);
+    }
+  };
+
+  const handleRestaurantApiSelect = async (placeId) => {
+    setRestaurantApiSelectedId(placeId);
+    setRestaurantApiDetails(null);
+    if (!placeId) return;
+
+    setRestaurantApiDetailsLoading(true);
+    setRestaurantApiError('');
+    try {
+      const details = await runPlaceDetails(placeId);
+      setRestaurantApiDetails(details);
+    } catch (detailError) {
+      setRestaurantApiError(detailError.message || 'No se pudo cargar el detalle.');
+    } finally {
+      setRestaurantApiDetailsLoading(false);
+    }
+  };
+
+  const handleRestaurantApiAutofill = async () => {
+    if (!restaurantApiSelectedId) {
+      setRestaurantApiError('Selecciona un resultado primero.');
+      return;
+    }
+
+    let details = restaurantApiDetails;
+    if (!details) {
+      setRestaurantApiDetailsLoading(true);
+      setRestaurantApiError('');
+      try {
+        details = await runPlaceDetails(restaurantApiSelectedId);
+        setRestaurantApiDetails(details);
+      } catch (detailError) {
+        setRestaurantApiError(detailError.message || 'No se pudo cargar el detalle.');
+        return;
+      } finally {
+        setRestaurantApiDetailsLoading(false);
+      }
+    }
+
+    if (!details) return;
+
+    if (details.name) {
+      setNewRestaurantName(details.name);
+    }
+    if (details.formatted_address) {
+      setNewRestaurantAddress(details.formatted_address);
+    }
+    const phoneValue =
+      details.formatted_phone_number || details.international_phone_number || '';
+    if (phoneValue) {
+      setNewRestaurantPhone(phoneValue);
+    }
+    if (details.geometry?.location) {
+      const lat = details.geometry.location.lat();
+      const lng = details.geometry.location.lng();
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        setNewRestaurantLat(lat.toFixed(6));
+        setNewRestaurantLng(lng.toFixed(6));
+      }
+    }
+    if (details.photos && details.photos.length > 0) {
+      const photoUrl = details.photos[0].getUrl({ maxWidth: 1200, maxHeight: 800 });
+      if (photoUrl) {
+        setNewRestaurantPhoto(photoUrl);
+      }
+    }
+  };
+
+  const openAdminModal = (type, { mode = 'create', student, restaurant, relations } = {}) => {
     setAdminModalType(type);
     setAdminError('');
     setAdminModalOpen(true);
     setAdminView(type);
+    setAdminMode(mode);
+    setEditingStudentId(null);
+    setEditingRestaurantId(null);
+    setDeletedRelationIds([]);
     if (type === 'student') {
-      setNewStudentRelations([{ restaurantId: '', role: '', currentJob: false }]);
       setNewStudentPassword('');
       setNewStudentPasswordConfirm('');
-      setNewStudentPhones(['']);
+      if (mode === 'edit' && student) {
+        const details = student.details || {};
+        setEditingStudentId(student.id || null);
+        setNewStudentName(getDetailValue(details, ['Name', 'name'], student.name || ''));
+        setNewStudentEmail(getDetailValue(details, ['Email', 'email', 'Mail', 'mail'], ''));
+        setNewStudentPhones(normalizePhoneList(details.Phone ?? details.phone));
+        setNewStudentPhoto(
+          getDetailValue(details, ['PhotoURL', 'PhotoUrl', 'photoUrl'], student.photoUrl || '')
+        );
+        setNewStudentLinkedIn(getDetailValue(details, ['LinkedIn', 'linkedin'], ''));
+        setNewStudentAlumni(normalizeBoolean(details.Alumni ?? details.alumni, true));
+        if (Array.isArray(relations) && relations.length) {
+          setNewStudentRelations(
+            relations.map((relation) => ({
+              id: relation.id,
+              restaurantId: relation.restaurantId || '',
+              role: relation.role || '',
+              currentJob: Boolean(relation.currentJob),
+              isExisting: true,
+            }))
+          );
+        } else {
+          setNewStudentRelations([]);
+        }
+      } else {
+        setNewStudentName('');
+        setNewStudentEmail('');
+        setNewStudentPhones(['']);
+        setNewStudentPhoto('');
+        setNewStudentLinkedIn('');
+        setNewStudentAlumni(true);
+        setNewStudentRelations([{ restaurantId: '', role: '', currentJob: false, isExisting: false }]);
+      }
     }
     if (type === 'restaurant') {
       setRestaurantSearchTerm('');
       setRestaurantSearchError('');
+      setRestaurantApiQuery('');
+      setRestaurantApiResults([]);
+      setRestaurantApiSelectedId('');
+      setRestaurantApiError('');
+      setRestaurantApiLoading(false);
+      setRestaurantApiDetails(null);
+      setRestaurantApiDetailsLoading(false);
+      if (mode === 'edit' && restaurant) {
+        const details = restaurant.details || {};
+        setEditingRestaurantId(restaurant.id || null);
+        setNewRestaurantName(getDetailValue(details, ['Name', 'name'], restaurant.name || ''));
+        setNewRestaurantAddress(
+          getDetailValue(details, ['Address', 'address'], restaurant.address || '')
+        );
+        setNewRestaurantEmail(getDetailValue(details, ['Email', 'email'], restaurant.email || ''));
+        setNewRestaurantPhone(getDetailValue(details, ['Phone', 'phone'], restaurant.phone || ''));
+        setNewRestaurantPhoto(
+          getDetailValue(details, ['PhotoURL', 'PhotoUrl', 'photoUrl'], restaurant.photoUrl || '')
+        );
+        setNewRestaurantLat(
+          Number.isFinite(restaurant.lat) ? restaurant.lat.toFixed(6) : ''
+        );
+        setNewRestaurantLng(
+          Number.isFinite(restaurant.lng) ? restaurant.lng.toFixed(6) : ''
+        );
+      } else {
+        setNewRestaurantName('');
+        setNewRestaurantAddress('');
+        setNewRestaurantEmail('');
+        setNewRestaurantPhone('');
+        setNewRestaurantPhoto('');
+        setNewRestaurantLat('');
+        setNewRestaurantLng('');
+      }
     }
   };
 
   const handleAddRelationRow = () => {
     setNewStudentRelations((current) => [
       ...current,
-      { restaurantId: '', role: '', currentJob: false },
+      { restaurantId: '', role: '', currentJob: false, isExisting: false },
     ]);
   };
 
@@ -352,7 +653,15 @@ function App() {
   };
 
   const handleRemoveRelationRow = (index) => {
-    setNewStudentRelations((current) => current.filter((_, rowIndex) => rowIndex !== index));
+    setNewStudentRelations((current) => {
+      const target = current[index];
+      if (target?.isExisting && target.id) {
+        setDeletedRelationIds((deleted) =>
+          deleted.includes(target.id) ? deleted : [...deleted, target.id]
+        );
+      }
+      return current.filter((_, rowIndex) => rowIndex !== index);
+    });
   };
 
   const updateRelationRow = (index, updates) => {
@@ -365,6 +674,17 @@ function App() {
     setAdminModalOpen(false);
     setAdminError('');
     setAdminView(null);
+    setAdminMode('create');
+    setEditingStudentId(null);
+    setEditingRestaurantId(null);
+    setDeletedRelationIds([]);
+    setRestaurantApiQuery('');
+    setRestaurantApiResults([]);
+    setRestaurantApiSelectedId('');
+    setRestaurantApiError('');
+    setRestaurantApiLoading(false);
+    setRestaurantApiDetails(null);
+    setRestaurantApiDetailsLoading(false);
   };
 
   const placeAdminMarker = (lat, lng, { flyTo = true } = {}) => {
@@ -435,7 +755,7 @@ function App() {
     }
   };
 
-  const handleCreateStudent = async () => {
+  const handleSaveStudent = async () => {
     if (!newStudentName.trim()) {
       setAdminError('El nombre es obligatorio.');
       return;
@@ -446,13 +766,25 @@ function App() {
       return;
     }
 
-    if (!newStudentPassword) {
-      setAdminError('La contrasena es obligatoria.');
-      return;
+    if (adminMode === 'create') {
+      if (!newStudentPassword) {
+        setAdminError('La contrasena es obligatoria.');
+        return;
+      }
+
+      if (newStudentPassword !== newStudentPasswordConfirm) {
+        setAdminError('Las contrasenas no coinciden.');
+        return;
+      }
     }
 
-    if (newStudentPassword !== newStudentPasswordConfirm) {
-      setAdminError('Las contrasenas no coinciden.');
+    const invalidRelation = newStudentRelations.find((relation) => {
+      const hasRestaurant = Boolean(relation.restaurantId);
+      const hasRole = Boolean(relation.role && relation.role.trim());
+      return (hasRestaurant && !hasRole) || (!hasRestaurant && hasRole);
+    });
+    if (invalidRelation) {
+      setAdminError('Completa la tienda y el rol en todas las relaciones.');
       return;
     }
 
@@ -460,30 +792,88 @@ function App() {
     setAdminLoading(true);
 
     try {
-      await registerWithEmailPassword(newStudentEmail.trim().toLowerCase(), newStudentPassword);
+      let targetStudentId = editingStudentId;
+      if (adminMode === 'create') {
+        await registerWithEmailPassword(newStudentEmail.trim().toLowerCase(), newStudentPassword);
 
-      const createdStudent = await createStudent({
-        name: newStudentName.trim(),
-        email: newStudentEmail.trim(),
-        phones: newStudentPhones.map((phone) => phone.trim()).filter(Boolean),
-        photoUrl: newStudentPhoto.trim(),
-        linkedIn: newStudentLinkedIn.trim(),
-        alumni: newStudentAlumni,
-      });
+        const createdStudent = await createStudent({
+          name: newStudentName.trim(),
+          email: newStudentEmail.trim(),
+          phones: newStudentPhones.map((phone) => phone.trim()).filter(Boolean),
+          photoUrl: newStudentPhoto.trim(),
+          linkedIn: newStudentLinkedIn.trim(),
+          alumni: newStudentAlumni,
+        });
+        targetStudentId = createdStudent.id;
+      } else {
+        if (!editingStudentId) {
+          throw new Error('No se pudo identificar el alumno.');
+        }
+        await updateStudent({
+          id: editingStudentId,
+          name: newStudentName.trim(),
+          email: newStudentEmail.trim(),
+          phones: newStudentPhones.map((phone) => phone.trim()).filter(Boolean),
+          photoUrl: newStudentPhoto.trim(),
+          linkedIn: newStudentLinkedIn.trim(),
+          alumni: newStudentAlumni,
+        });
+      }
 
       const validRelations = newStudentRelations.filter(
-        (relation) => relation.restaurantId && relation.role.trim()
+        (relation) =>
+          !relation.isExisting &&
+          relation.restaurantId &&
+          relation.role.trim()
       );
 
-      if (validRelations.length > 0) {
-        await Promise.all(
-          validRelations.map((relation) => createRestAlum({
-            alumniId: createdStudent.id,
-            restaurantId: relation.restaurantId,
-            role: relation.role.trim(),
-            currentJob: relation.currentJob,
-          }))
+      const existingRelations = newStudentRelations.filter(
+        (relation) =>
+          relation.isExisting &&
+          relation.id &&
+          relation.restaurantId &&
+          relation.role.trim()
+      );
+
+      const relationTasks = [];
+
+      if (validRelations.length > 0 && targetStudentId) {
+        relationTasks.push(
+          Promise.all(
+            validRelations.map((relation) => createRestAlum({
+              alumniId: targetStudentId,
+              restaurantId: relation.restaurantId,
+              role: relation.role.trim(),
+              currentJob: relation.currentJob,
+            }))
+          )
         );
+      }
+
+      if (existingRelations.length > 0) {
+        relationTasks.push(
+          Promise.all(
+            existingRelations.map((relation) =>
+              updateRestAlum({
+                id: relation.id,
+                alumniId: targetStudentId,
+                restaurantId: relation.restaurantId,
+                role: relation.role.trim(),
+                currentJob: relation.currentJob,
+              })
+            )
+          )
+        );
+      }
+
+      if (deletedRelationIds.length > 0) {
+        relationTasks.push(
+          Promise.all(deletedRelationIds.map((relationId) => deleteRestAlum(relationId)))
+        );
+      }
+
+      if (relationTasks.length > 0) {
+        await Promise.all(relationTasks);
       }
       setNewStudentName('');
       setNewStudentEmail('');
@@ -493,17 +883,18 @@ function App() {
       setNewStudentAlumni(true);
       setNewStudentPassword('');
       setNewStudentPasswordConfirm('');
-      setNewStudentRelations([{ restaurantId: '', role: '', currentJob: false }]);
+      setNewStudentRelations([{ restaurantId: '', role: '', currentJob: false, isExisting: false }]);
+      setDeletedRelationIds([]);
       setReloadToken((value) => value + 1);
       closeAdminModal();
     } catch (adminErr) {
-      setAdminError(adminErr.message || 'No se pudo crear el alumno.');
+      setAdminError(adminErr.message || 'No se pudo guardar el alumno.');
     } finally {
       setAdminLoading(false);
     }
   };
 
-  const handleCreateRestaurant = async () => {
+  const handleSaveRestaurant = async () => {
     if (!newRestaurantName.trim()) {
       setAdminError('El nombre es obligatorio.');
       return;
@@ -522,15 +913,31 @@ function App() {
     setAdminLoading(true);
 
     try {
-      await createRestaurant({
-        name: newRestaurantName.trim(),
-        address: newRestaurantAddress.trim(),
-        email: newRestaurantEmail.trim(),
-        phone: newRestaurantPhone.trim(),
-        photoUrl: newRestaurantPhoto.trim(),
-        latitude: hasLocation ? latValue : undefined,
-        longitude: hasLocation ? lngValue : undefined,
-      });
+      if (adminMode === 'edit') {
+        if (!editingRestaurantId) {
+          throw new Error('No se pudo identificar la tienda.');
+        }
+        await updateRestaurant({
+          id: editingRestaurantId,
+          name: newRestaurantName.trim(),
+          address: newRestaurantAddress.trim(),
+          email: newRestaurantEmail.trim(),
+          phone: newRestaurantPhone.trim(),
+          photoUrl: newRestaurantPhoto.trim(),
+          latitude: hasLocation ? latValue : undefined,
+          longitude: hasLocation ? lngValue : undefined,
+        });
+      } else {
+        await createRestaurant({
+          name: newRestaurantName.trim(),
+          address: newRestaurantAddress.trim(),
+          email: newRestaurantEmail.trim(),
+          phone: newRestaurantPhone.trim(),
+          photoUrl: newRestaurantPhoto.trim(),
+          latitude: hasLocation ? latValue : undefined,
+          longitude: hasLocation ? lngValue : undefined,
+        });
+      }
       setNewRestaurantName('');
       setNewRestaurantAddress('');
       setNewRestaurantEmail('');
@@ -541,7 +948,7 @@ function App() {
       setReloadToken((value) => value + 1);
       closeAdminModal();
     } catch (adminErr) {
-      setAdminError(adminErr.message || 'No se pudo crear la tienda.');
+      setAdminError(adminErr.message || 'No se pudo guardar la tienda.');
     } finally {
       setAdminLoading(false);
     }
@@ -732,11 +1139,23 @@ function App() {
           <div className="admin-form-shell">
             <div className="admin-form-header">
               <div className="admin-form-heading">
-                <h2>{adminModalType === 'student' ? 'Crear alumno' : 'Crear tienda'}</h2>
+                <h2>
+                  {adminModalType === 'student'
+                    ? adminMode === 'edit'
+                      ? 'Editar alumno'
+                      : 'Crear alumno'
+                    : adminMode === 'edit'
+                      ? 'Editar tienda'
+                      : 'Crear tienda'}
+                </h2>
                 <p>
                   {adminModalType === 'student'
-                    ? 'Registra un nuevo alumno y verifica su informacion.'
-                    : 'Registra una nueva tienda y completa los datos clave.'}
+                    ? adminMode === 'edit'
+                      ? 'Actualiza los datos del alumno y revisa su informacion.'
+                      : 'Registra un nuevo alumno y verifica su informacion.'
+                    : adminMode === 'edit'
+                      ? 'Actualiza los datos de la tienda y revisa los detalles.'
+                      : 'Registra una nueva tienda y completa los datos clave.'}
                 </p>
               </div>
             </div>
@@ -811,30 +1230,32 @@ function App() {
                       value={newStudentEmail}
                       onChange={(event) => setNewStudentEmail(event.target.value)}
                     />
-                    <div className="admin-grid">
-                      <div>
-                        <label className="admin-label" htmlFor="new-student-password">Contrasena</label>
-                        <input
-                          id="new-student-password"
-                          className="admin-input"
-                          type="password"
-                          placeholder="Minimo 6 caracteres"
-                          value={newStudentPassword}
-                          onChange={(event) => setNewStudentPassword(event.target.value)}
-                        />
+                    {adminMode === 'create' && (
+                      <div className="admin-grid">
+                        <div>
+                          <label className="admin-label" htmlFor="new-student-password">Contrasena</label>
+                          <input
+                            id="new-student-password"
+                            className="admin-input"
+                            type="password"
+                            placeholder="Minimo 6 caracteres"
+                            value={newStudentPassword}
+                            onChange={(event) => setNewStudentPassword(event.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="admin-label" htmlFor="new-student-password-confirm">Confirmar</label>
+                          <input
+                            id="new-student-password-confirm"
+                            className="admin-input"
+                            type="password"
+                            placeholder="Repite la contrasena"
+                            value={newStudentPasswordConfirm}
+                            onChange={(event) => setNewStudentPasswordConfirm(event.target.value)}
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label className="admin-label" htmlFor="new-student-password-confirm">Confirmar</label>
-                        <input
-                          id="new-student-password-confirm"
-                          className="admin-input"
-                          type="password"
-                          placeholder="Repite la contrasena"
-                          value={newStudentPasswordConfirm}
-                          onChange={(event) => setNewStudentPasswordConfirm(event.target.value)}
-                        />
-                      </div>
-                    </div>
+                    )}
                     <label className="admin-label" htmlFor="new-student-photo">Photo URL</label>
                     <input
                       id="new-student-photo"
@@ -869,21 +1290,24 @@ function App() {
                           + Anadir restaurante
                         </button>
                       </div>
-                      {newStudentRelations.map((relation, index) => (
-                        <div key={`${relation.restaurantId}-${index}`} className="admin-relation-row">
-                          <div className="admin-relation-field">
-                            <label className="admin-label" htmlFor={`relation-restaurant-${index}`}>
-                              Tienda
-                            </label>
-                            <select
-                              id={`relation-restaurant-${index}`}
-                              className="admin-input"
-                              value={relation.restaurantId}
-                              onChange={(event) => updateRelationRow(index, { restaurantId: event.target.value })}
-                            >
-                              <option value="">Selecciona una tienda</option>
-                              {restaurantsOptions.map((restaurant) => (
-                                <option key={restaurant.id} value={restaurant.id}>
+      {newStudentRelations.map((relation, index) => (
+        <div
+          key={relation.id ? `relation-${relation.id}` : `${relation.restaurantId}-${index}`}
+          className="admin-relation-row"
+        >
+          <div className="admin-relation-field">
+            <label className="admin-label" htmlFor={`relation-restaurant-${index}`}>
+              Tienda
+            </label>
+            <select
+              id={`relation-restaurant-${index}`}
+              className="admin-input"
+              value={relation.restaurantId}
+              onChange={(event) => updateRelationRow(index, { restaurantId: event.target.value })}
+            >
+              <option value="">Selecciona una tienda</option>
+              {restaurantsOptions.map((restaurant) => (
+                <option key={restaurant.id} value={restaurant.id}>
                                   {restaurant.name}
                                 </option>
                               ))}
@@ -893,32 +1317,32 @@ function App() {
                             <label className="admin-label" htmlFor={`relation-role-${index}`}>
                               Rol
                             </label>
-                            <input
-                              id={`relation-role-${index}`}
-                              className="admin-input"
-                              type="text"
-                              placeholder="Cocinero/a"
-                              value={relation.role}
-                              onChange={(event) => updateRelationRow(index, { role: event.target.value })}
-                            />
-                          </div>
-                          <label className="admin-relation-toggle">
-                            <input
-                              type="checkbox"
-                              checked={relation.currentJob}
-                              onChange={(event) => updateRelationRow(index, { currentJob: event.target.checked })}
-                            />
-                            Trabajo actual
-                          </label>
-                          {newStudentRelations.length > 1 && (
-                            <button
-                              type="button"
-                              className="admin-remove-row"
-                              onClick={() => handleRemoveRelationRow(index)}
-                            >
-                              Quitar
-                            </button>
-                          )}
+            <input
+              id={`relation-role-${index}`}
+              className="admin-input"
+              type="text"
+              placeholder="Cocinero/a"
+              value={relation.role}
+              onChange={(event) => updateRelationRow(index, { role: event.target.value })}
+            />
+          </div>
+          <label className="admin-relation-toggle">
+            <input
+              type="checkbox"
+              checked={relation.currentJob}
+              onChange={(event) => updateRelationRow(index, { currentJob: event.target.checked })}
+            />
+            Trabajo actual
+          </label>
+          {(relation.isExisting || newStudentRelations.length > 1) && (
+            <button
+              type="button"
+              className="admin-remove-row"
+              onClick={() => handleRemoveRelationRow(index)}
+            >
+              {relation.isExisting ? 'Eliminar' : 'Quitar'}
+            </button>
+          )}
                         </div>
                       ))}
                     </div>
@@ -927,10 +1351,14 @@ function App() {
                       <button
                         type="button"
                         className="auth-submit"
-                        onClick={handleCreateStudent}
+                        onClick={handleSaveStudent}
                         disabled={adminLoading}
                       >
-                        {adminLoading ? 'Guardando...' : 'Guardar alumno'}
+                        {adminLoading
+                          ? 'Guardando...'
+                          : adminMode === 'edit'
+                            ? 'Guardar cambios'
+                            : 'Guardar alumno'}
                       </button>
                     </div>
                   </>
@@ -945,6 +1373,61 @@ function App() {
                       value={newRestaurantName}
                       onChange={(event) => setNewRestaurantName(event.target.value)}
                     />
+                    <div className="admin-api-section">
+                      <label className="admin-label" htmlFor="restaurant-api-search">
+                        Buscar en Google
+                      </label>
+                      <div className="admin-map-search-row">
+                        <input
+                          id="restaurant-api-search"
+                          className="admin-input"
+                          type="text"
+                          placeholder="Ej: Restaurante italiano en Barcelona"
+                          value={restaurantApiQuery}
+                          onChange={(event) => setRestaurantApiQuery(event.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className="admin-map-search-button"
+                          onClick={handleRestaurantApiSearch}
+                          disabled={restaurantApiLoading}
+                        >
+                          {restaurantApiLoading ? 'Buscando...' : 'Buscar'}
+                        </button>
+                      </div>
+                      {restaurantApiError && <p className="auth-error">{restaurantApiError}</p>}
+                      {restaurantApiResults.length > 0 && (
+                        <div className="admin-api-results">
+                          <label className="admin-label" htmlFor="restaurant-api-results">
+                            Resultados
+                          </label>
+                          <div className="admin-api-results-row">
+                            <select
+                              id="restaurant-api-results"
+                              className="admin-input"
+                              value={restaurantApiSelectedId}
+                              onChange={(event) => handleRestaurantApiSelect(event.target.value)}
+                            >
+                              <option value="">Selecciona un resultado</option>
+                              {restaurantApiResults.map((place) => (
+                                <option key={place.id} value={place.id}>
+                                  {place.name}
+                                  {place.address ? ` - ${place.address}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="admin-map-search-button"
+                              onClick={handleRestaurantApiAutofill}
+                              disabled={!restaurantApiSelectedId || restaurantApiDetailsLoading}
+                            >
+                              {restaurantApiDetailsLoading ? 'Cargando...' : 'Autocompletar'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                     <label className="admin-label" htmlFor="new-restaurant-address">Direccion</label>
                     <input
                       id="new-restaurant-address"
@@ -1025,10 +1508,14 @@ function App() {
                       <button
                         type="button"
                         className="auth-submit"
-                        onClick={handleCreateRestaurant}
+                        onClick={handleSaveRestaurant}
                         disabled={adminLoading}
                       >
-                        {adminLoading ? 'Guardando...' : 'Guardar tienda'}
+                        {adminLoading
+                          ? 'Guardando...'
+                          : adminMode === 'edit'
+                            ? 'Guardar cambios'
+                            : 'Guardar tienda'}
                       </button>
                     </div>
                   </>
@@ -1045,7 +1532,9 @@ function App() {
             onSelectStudent={handleSelectStudent}
             onOpenRestaurant={handleOpenRestaurantDetail}
             onBack={handleBack}
+            onEditStudent={handleEditStudent}
             isAdmin={isAdmin}
+            isLoggedIn={isLoggedIn}
             reloadToken={reloadToken}
           />
         )}
@@ -1055,6 +1544,8 @@ function App() {
             onSelectRestaurant={handleSelectRestaurant}
             onOpenStudent={handleOpenStudentDetail}
             onBack={handleBack}
+            onEditRestaurant={handleEditRestaurant}
+            isAdmin={isAdmin}
             reloadToken={reloadToken}
           />
         )}

@@ -529,6 +529,23 @@
   align-items: center;
 }
 
+.admin-api-section {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-api-results {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-api-results-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
 .admin-map-search-button {
   border: none;
   border-radius: 12px;
@@ -774,7 +791,8 @@
 
 .student-details-actions {
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 12px;
 }
 
@@ -788,6 +806,24 @@
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
   box-shadow: 0 6px 14px rgba(18, 138, 143, 0.25);
+}
+
+.student-edit-button {
+  border: 1px solid #128a8f;
+  border-radius: 999px;
+  padding: 8px 16px;
+  background-color: #ffffff;
+  color: #128a8f;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  box-shadow: 0 6px 14px rgba(18, 138, 143, 0.12);
+}
+
+.student-edit-button:hover {
+  transform: translateY(-1px);
+  background-color: #f1fbfb;
+  box-shadow: 0 10px 18px rgba(18, 138, 143, 0.2);
 }
 
 .student-back-button:hover {

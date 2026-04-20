@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createRestAlum, getRestAlum, getRestaurants, getStudents } from './firestoreApi';
+import defaultAvatar from './Imatges/default-avatar-profile.jpg';
+import { getRestAlum, getRestaurants, getStudents } from './firestoreApi';
 
 function StudentsView({
   selectedStudentId: controlledStudentId,
   onSelectStudent,
   onOpenRestaurant,
   onBack,
+  onEditStudent,
   isAdmin = false,
+  isLoggedIn = false,
   reloadToken = 0,
 }) {
   const [students, setStudents] = useState([]);
@@ -16,11 +19,6 @@ function StudentsView({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [internalSelectedStudentId, setInternalSelectedStudentId] = useState(null);
-  const [relationRestaurantId, setRelationRestaurantId] = useState('');
-  const [relationRole, setRelationRole] = useState('');
-  const [relationCurrentJob, setRelationCurrentJob] = useState(false);
-  const [relationError, setRelationError] = useState('');
-  const [relationLoading, setRelationLoading] = useState(false);
 
   const isControlled = controlledStudentId !== undefined;
   const selectedStudentId = isControlled ? controlledStudentId : internalSelectedStudentId;
@@ -208,6 +206,20 @@ function StudentsView({
     return formatted;
   };
 
+  const PRIVATE_LABELS = new Set(['Telefono', 'Email', 'LinkedIn']);
+  const PRIVATE_KEYS = new Set([
+    'Telf',
+    'Tel',
+    'Phone',
+    'phone',
+    'Email',
+    'email',
+    'Mail',
+    'mail',
+    'LinkedIn',
+    'linkedin',
+  ]);
+
   const detailEntries = useMemo(() => {
     if (!selectedStudent?.details) return [];
     const details = selectedStudent.details;
@@ -228,58 +240,16 @@ function StudentsView({
         usedKeys.add(matchKey);
         return [field.label, details[matchKey]];
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter(([label]) => isLoggedIn || !PRIVATE_LABELS.has(label));
 
     const remainingEntries = Object.entries(details)
       .filter(([key]) => !usedKeys.has(key) && !hiddenKeys.has(key))
+      .filter(([key]) => isLoggedIn || !PRIVATE_KEYS.has(key))
       .sort(([a], [b]) => a.localeCompare(b));
 
     return [...orderedEntries, ...remainingEntries];
-  }, [selectedStudent]);
-
-  const sortedRestaurants = useMemo(
-    () => [...restaurants].sort((a, b) => a.name.localeCompare(b.name)),
-    [restaurants]
-  );
-
-  const handleAddRelation = async () => {
-    if (!selectedStudent) return;
-    if (!relationRestaurantId) {
-      setRelationError('Selecciona una tienda.');
-      return;
-    }
-
-    setRelationError('');
-    setRelationLoading(true);
-
-    try {
-      const created = await createRestAlum({
-        alumniId: selectedStudent.id,
-        restaurantId: relationRestaurantId,
-        role: relationRole.trim(),
-        currentJob: relationCurrentJob,
-      });
-
-      setRestAlum((current) => [
-        ...current,
-        {
-          id: created.id,
-          alumniId: selectedStudent.id,
-          restaurantId: relationRestaurantId,
-          role: relationRole.trim(),
-          currentJob: relationCurrentJob,
-          details: created.fields || {},
-        },
-      ]);
-      setRelationRestaurantId('');
-      setRelationRole('');
-      setRelationCurrentJob(false);
-    } catch (relationErr) {
-      setRelationError(relationErr.message || 'No se pudo guardar la relacion.');
-    } finally {
-      setRelationLoading(false);
-    }
-  };
+  }, [selectedStudent, isLoggedIn]);
 
   const handleBack = () => {
     if (onBack) {
@@ -305,20 +275,31 @@ function StudentsView({
             >
               Volver
             </button>
+            {isAdmin && onEditStudent && (
+              <button
+                type="button"
+                className="student-edit-button"
+                onClick={() => onEditStudent(
+                  selectedStudent,
+                  relatedRestaurants.map((relation) => ({
+                    id: relation.id,
+                    restaurantId: relation.restaurantId,
+                    role: relation.role || '',
+                    currentJob: relation.currentJob,
+                  }))
+                )}
+              >
+                Editar
+              </button>
+            )}
           </div>
           <h2>Detalle del alumno</h2>
           <div className="student-details-header">
-            {selectedStudent.photoUrl ? (
-              <img
-                src={selectedStudent.photoUrl}
-                alt={selectedStudent.name}
-                className="student-details-photo"
-              />
-            ) : (
-              <div className="student-details-photo student-photo-placeholder">
-                Sin imagen
-              </div>
-            )}
+            <img
+              src={selectedStudent.photoUrl || defaultAvatar}
+              alt={selectedStudent.name}
+              className="student-details-photo"
+            />
             <div>
               <p className="student-details-name">{selectedStudent.name}</p>
             </div>
@@ -371,52 +352,6 @@ function StudentsView({
               <p>No hay restaurantes asociados.</p>
             )}
           </div>
-          {isAdmin && (
-            <div className="related-section">
-              <h3>Anadir relacion</h3>
-              <label className="search-label" htmlFor="relation-restaurant">
-                Tienda
-              </label>
-              <select
-                id="relation-restaurant"
-                className="search-input"
-                value={relationRestaurantId}
-                onChange={(event) => setRelationRestaurantId(event.target.value)}
-              >
-                <option value="">Selecciona una tienda</option>
-                {sortedRestaurants.map((restaurant) => (
-                  <option key={restaurant.id} value={restaurant.id}>
-                    {restaurant.name}
-                  </option>
-                ))}
-              </select>
-              <label className="search-label" htmlFor="relation-role">Rol</label>
-              <input
-                id="relation-role"
-                className="search-input"
-                type="text"
-                value={relationRole}
-                onChange={(event) => setRelationRole(event.target.value)}
-              />
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={relationCurrentJob}
-                  onChange={(event) => setRelationCurrentJob(event.target.checked)}
-                />
-                Trabajo actual
-              </label>
-              {relationError && <p className="auth-error">{relationError}</p>}
-              <button
-                type="button"
-                className="auth-submit"
-                onClick={handleAddRelation}
-                disabled={relationLoading}
-              >
-                {relationLoading ? 'Guardando...' : 'Guardar relacion'}
-              </button>
-            </div>
-          )}
         </div>
       ) : (
         <>
@@ -453,11 +388,11 @@ function StudentsView({
                 className="student-card"
                 onClick={() => setSelectedStudentId(student.id)}
               >
-                {student.photoUrl ? (
-                  <img src={student.photoUrl} alt={student.name} className="student-photo" />
-                ) : (
-                  <div className="student-photo student-photo-placeholder">Sin imagen</div>
-                )}
+                <img
+                  src={student.photoUrl || defaultAvatar}
+                  alt={student.name}
+                  className="student-photo"
+                />
                 <h2>{student.name}</h2>
               </button>
             ))}
