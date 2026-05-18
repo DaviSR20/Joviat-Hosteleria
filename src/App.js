@@ -1,17 +1,29 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import logo from './logo_joviat.webp';
+import defaultAvatar from './Imatges/default-avatar-profile.jpg';
+import joviatMarkerImage from './Imatges/JoviatJ.png';
 import HomeView from './HomeView';
 import StudentsView from './StudentsView';
 import ShopsMapView from './ShopsMapView';
-import { registerWithEmailPassword, signInWithEmailPassword } from './firebaseAuthApi';
+import { registerWithEmailPassword, signInWithEmailPassword, updatePasswordWithIdToken } from './firebaseAuthApi';
 import {
+  createAccessRequest,
+  createRestaurantRequest,
   createRestAlum,
   createRestaurant,
+  createStudentSignup,
   createStudent,
   deleteRestAlum,
+  getAccessRequests,
+  getRestaurantRequests,
+  getRestAlum,
   getRestaurants,
+  getStudentSignups,
+  getStudents,
   isAdminEmail,
+  updateAccessRequestStatus,
+  updateRestaurantRequestStatus,
   updateRestAlum,
   updateRestaurant,
   updateStudent,
@@ -19,6 +31,125 @@ import {
 
 const BARCELONA_CENTER = [41.3874, 2.1686];
 const GOOGLE_MAPS_API_KEY = (process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '').trim();
+const LANGUAGE_OPTIONS = [
+  { value: 'es', label: 'ES' },
+  { value: 'ca', label: 'CA' },
+  { value: 'en', label: 'EN' },
+];
+
+const UI_TEXT = {
+  es: {
+    menuTitle: 'Menu',
+    home: 'Inicio',
+    students: 'Alumnos',
+    shops: 'Restaurantes',
+    addStudent: 'Anadir alumno',
+    addShop: 'Anadir restaurante',
+    manageRequests: 'Gestionar altas',
+    editProfile: 'Editar perfil',
+    login: 'Login',
+    requestAccess: 'Solicitar acceso',
+    logout: 'Logout',
+    language: 'Idioma',
+  },
+  ca: {
+    menuTitle: 'Menu',
+    home: 'Inici',
+    students: 'Alumnes',
+    shops: 'Restaurants',
+    addStudent: 'Afegir alumne',
+    addShop: 'Afegir restaurant',
+    manageRequests: 'Gestionar altes',
+    editProfile: 'Editar perfil',
+    login: 'Iniciar sessio',
+    requestAccess: 'Sol licitar acces',
+    logout: 'Sortir',
+    language: 'Idioma',
+  },
+  en: {
+    menuTitle: 'Menu',
+    home: 'Home',
+    students: 'Students',
+    shops: 'Restaurants',
+    addStudent: 'Add student',
+    addShop: 'Add restaurant',
+    manageRequests: 'Manage requests',
+    editProfile: 'Edit profile',
+    login: 'Login',
+    requestAccess: 'Request access',
+    logout: 'Logout',
+    language: 'Language',
+  },
+};
+
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+const normalizeText = (value) => String(value || '').trim().toLowerCase();
+
+const getLatestApprovedAccessRequestForEmail = (requests, email) => {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail || !Array.isArray(requests)) return null;
+
+  const matches = requests.filter(
+    (request) =>
+      normalizeEmail(request.email) === normalizedEmail &&
+      String(request.status || '').trim().toLowerCase() === 'approved'
+  );
+
+  if (matches.length === 0) return null;
+
+  return matches
+    .slice()
+    .sort((a, b) => {
+      const aDate = String(a.reviewedAt || a.createdAt || '');
+      const bDate = String(b.reviewedAt || b.createdAt || '');
+      return bDate.localeCompare(aDate);
+    })[0];
+};
+
+const createJoviatMarkerIcon = (leaflet) => leaflet.icon({
+  iconUrl: joviatMarkerImage,
+  iconSize: [38, 38],
+  iconAnchor: [19, 38],
+  popupAnchor: [0, -34],
+  className: 'joviat-map-pin',
+});
+
+const findStudentByEmail = (studentsList, email) => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+
+  return (
+    studentsList.find((student) => {
+      const details = student.details || {};
+      const candidateEmail = normalizeEmail(
+        details.Email || details.email || details.Mail || details.mail
+      );
+      return candidateEmail === normalized;
+    }) || null
+  );
+};
+
+const getStudentMatchIds = (student) => {
+  if (!student) return new Set();
+  const details = student.details || {};
+  const candidates = [
+    student.id,
+    details.id,
+    details.Id,
+    details.ID,
+    details.id_alumni,
+    details.idAlumni,
+    details.alumniId,
+    details.uid,
+    details.uid_alumni,
+    details.uidAlumni,
+  ];
+  return new Set(
+    candidates
+      .filter((value) => value !== null && value !== undefined && `${value}`.trim())
+      .map((value) => `${value}`.trim())
+  );
+};
 
 const loadLeafletAssets = async () => {
   if (window.L) return;
@@ -93,7 +224,20 @@ function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [authUserEmail, setAuthUserEmail] = useState('');
+  const [authIdToken, setAuthIdToken] = useState('');
+  const [authUserPhoto, setAuthUserPhoto] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [mustChangePasswordOpen, setMustChangePasswordOpen] = useState(false);
+  const [mustChangePasswordRequestId, setMustChangePasswordRequestId] = useState('');
+  const [mustChangePasswordValue, setMustChangePasswordValue] = useState('');
+  const [mustChangePasswordConfirm, setMustChangePasswordConfirm] = useState('');
+  const [mustChangePasswordError, setMustChangePasswordError] = useState('');
+  const [mustChangePasswordLoading, setMustChangePasswordLoading] = useState(false);
+  const [language, setLanguage] = useState('es');
+  const [requestAccessEmail, setRequestAccessEmail] = useState('');
+  const [requestAccessName, setRequestAccessName] = useState('');
+  const [requestAccessLoading, setRequestAccessLoading] = useState(false);
+  const [requestAccessMessage, setRequestAccessMessage] = useState('');
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const [adminModalType, setAdminModalType] = useState('student');
   const [adminMode, setAdminMode] = useState('create');
@@ -135,14 +279,47 @@ function App() {
   const [restaurantSearchTerm, setRestaurantSearchTerm] = useState('');
   const [restaurantSearchError, setRestaurantSearchError] = useState('');
   const [restaurantSearchLoading, setRestaurantSearchLoading] = useState(false);
+  const [manageLoading, setManageLoading] = useState(false);
+  const [manageError, setManageError] = useState('');
+  const [accessRequests, setAccessRequests] = useState([]);
+  const [studentSignups, setStudentSignups] = useState([]);
+  const [restaurantRequests, setRestaurantRequests] = useState([]);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [profileMessage, setProfileMessage] = useState('');
+  const [profileStudentId, setProfileStudentId] = useState('');
+  const [profileName, setProfileName] = useState('');
+  const [profilePhones, setProfilePhones] = useState(['']);
+  const [profileLinkedIn, setProfileLinkedIn] = useState('');
+  const [profilePhoto, setProfilePhoto] = useState('');
+  const [profileAlumni, setProfileAlumni] = useState(true);
+  const [profileRelations, setProfileRelations] = useState([]);
+  const [profileDeletedRelationIds, setProfileDeletedRelationIds] = useState([]);
+  const [profileRestaurantRequests, setProfileRestaurantRequests] = useState([]);
+  const [profileRestaurantRequestName, setProfileRestaurantRequestName] = useState('');
+  const [profileRestaurantRequestAddress, setProfileRestaurantRequestAddress] = useState('');
+  const [profileRestaurantRequestPhone, setProfileRestaurantRequestPhone] = useState('');
+  const [profileRestaurantRequestNotes, setProfileRestaurantRequestNotes] = useState('');
+  const [profileRestaurantRequestLoading, setProfileRestaurantRequestLoading] = useState(false);
+  const [profileRestaurantRequestError, setProfileRestaurantRequestError] = useState('');
+  const [profileRestaurantRequestMessage, setProfileRestaurantRequestMessage] = useState('');
+  const [profileRestaurantRequestLat, setProfileRestaurantRequestLat] = useState('');
+  const [profileRestaurantRequestLng, setProfileRestaurantRequestLng] = useState('');
+  const [profileRestaurantMapSearchLoading, setProfileRestaurantMapSearchLoading] = useState(false);
+  const [profileRestaurantMapError, setProfileRestaurantMapError] = useState('');
   const adminMapRef = useRef(null);
   const adminMapInstanceRef = useRef(null);
   const adminMarkerRef = useRef(null);
+  const profileRequestMapRef = useRef(null);
+  const profileRequestMapInstanceRef = useRef(null);
+  const profileRequestMarkerRef = useRef(null);
   const placesServiceRef = useRef(null);
   const currentView = viewStack[viewStack.length - 1];
   const activeSection = currentView.section;
   const selectedStudentId = currentView.selectedStudentId;
   const selectedRestaurantId = currentView.selectedRestaurantId;
+  const uiText = UI_TEXT[language] || UI_TEXT.es;
 
   useEffect(() => {
     const handleResize = () => {
@@ -182,7 +359,41 @@ function App() {
     };
   }, [reloadToken]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadLoggedProfile = async () => {
+      if (!isLoggedIn || !authUserEmail) {
+        if (isMounted) {
+          setAuthUserPhoto('');
+        }
+        return;
+      }
+
+      try {
+        const studentsFromApi = await getStudents();
+        if (!isMounted) return;
+        const studentMatch = findStudentByEmail(studentsFromApi, authUserEmail);
+        setAuthUserPhoto(studentMatch?.photoUrl || '');
+      } catch {
+        if (isMounted) {
+          setAuthUserPhoto('');
+        }
+      }
+    };
+
+    loadLoggedProfile();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isLoggedIn, authUserEmail, reloadToken]);
+
   const isSidebarVisible = !isMobileView || isMenuOpen;
+  const isSidebarButtonActive = (buttonKey) => {
+    if (adminView) return adminView === buttonKey;
+    return activeSection === buttonKey;
+  };
 
   const buildView = (current, next) => ({
     section: next.section ?? current.section,
@@ -318,6 +529,470 @@ function App() {
     openAdminModal('restaurant', { mode: 'edit', restaurant });
   };
 
+  const loadManageData = useCallback(async () => {
+    if (!isAdmin) return;
+    setManageLoading(true);
+    setManageError('');
+    try {
+      const [requestsFromApi, signupsFromApi, restaurantRequestsFromApi] = await Promise.all([
+        getAccessRequests(),
+        getStudentSignups(),
+        getRestaurantRequests(),
+      ]);
+      setAccessRequests(requestsFromApi);
+      setStudentSignups(signupsFromApi);
+      setRestaurantRequests(restaurantRequestsFromApi);
+    } catch (manageLoadError) {
+      setManageError(manageLoadError.message || 'No se pudo cargar la gestion de altas.');
+    } finally {
+      setManageLoading(false);
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin || adminView !== 'manage' || adminModalOpen) return;
+    loadManageData();
+  }, [isAdmin, adminView, adminModalOpen, reloadToken, loadManageData]);
+
+  const openManageView = () => {
+    closeAdminModal();
+    setAdminView('manage');
+    loadManageData();
+  };
+
+  const handleAccessRequestReview = async (request, status) => {
+    if (!request?.id) return;
+
+    try {
+      const normalizedStatus = normalizeText(status);
+      const requestEmail = normalizeEmail(request.email);
+
+      if (normalizedStatus === 'approved') {
+        if (!requestEmail) {
+          throw new Error('La solicitud no tiene un correo valido.');
+        }
+
+        try {
+          // Password provisional: el propio correo. Se forzara cambio en el primer login.
+          await registerWithEmailPassword(requestEmail, requestEmail);
+        } catch (createUserError) {
+          const message = String(createUserError?.message || '');
+          if (!message.includes('ya esta registrado')) {
+            throw new Error(createUserError.message || 'No se pudo crear el usuario de acceso.');
+          }
+        }
+
+        await updateAccessRequestStatus({
+          id: request.id,
+          status: normalizedStatus,
+          reviewedBy: authUserEmail,
+          mustChangePassword: true,
+          authUserCreated: true,
+          provisioningError: '',
+          updateReviewMetadata: true,
+        });
+      } else {
+        await updateAccessRequestStatus({
+          id: request.id,
+          status: normalizedStatus,
+          reviewedBy: authUserEmail,
+          mustChangePassword: false,
+          authUserCreated: false,
+          updateReviewMetadata: true,
+        });
+      }
+
+      await loadManageData();
+    } catch (reviewError) {
+      setManageError(reviewError.message || 'No se pudo actualizar la solicitud.');
+    }
+  };
+
+  const handleRestaurantRequestReview = async (request, status) => {
+    if (!request?.id) return;
+
+    try {
+      const normalizedStatus = normalizeText(status);
+      if (normalizedStatus === 'approved') {
+        const restaurantName = String(request.restaurantName || '').trim();
+        if (!restaurantName) {
+          throw new Error('La solicitud no tiene nombre de restaurante.');
+        }
+
+        const existingRestaurants = await getRestaurants();
+        const targetAddress = normalizeText(request.restaurantAddress);
+        const duplicateRestaurant = existingRestaurants.some((restaurant) => {
+          const sameName = normalizeText(restaurant.name) === normalizeText(restaurantName);
+          if (!sameName) return false;
+          if (!targetAddress) return true;
+          return normalizeText(restaurant.address) === targetAddress;
+        });
+
+        if (!duplicateRestaurant) {
+          const requestLat = Number(request.lat);
+          const requestLng = Number(request.lng);
+          await createRestaurant({
+            name: restaurantName,
+            address: String(request.restaurantAddress || '').trim(),
+            phone: String(request.restaurantPhone || '').trim(),
+            latitude: Number.isFinite(requestLat) ? requestLat : undefined,
+            longitude: Number.isFinite(requestLng) ? requestLng : undefined,
+          });
+        }
+      }
+
+      await updateRestaurantRequestStatus({
+        id: request.id,
+        status: normalizedStatus,
+        reviewedBy: authUserEmail,
+      });
+
+      setReloadToken((value) => value + 1);
+      await loadManageData();
+    } catch (reviewError) {
+      setManageError(reviewError.message || 'No se pudo actualizar la solicitud de restaurante.');
+    }
+  };
+
+  const loadProfileData = async () => {
+    if (!isLoggedIn || !authUserEmail) return;
+
+    setProfileLoading(true);
+    setProfileError('');
+    setProfileMessage('');
+    setProfileRestaurantRequestError('');
+    setProfileRestaurantRequestMessage('');
+    setProfileRestaurantMapError('');
+    setProfileRestaurantRequestLat('');
+    setProfileRestaurantRequestLng('');
+
+    try {
+      const [studentsFromApi, relationsFromApi, restaurantRequestsFromApi] = await Promise.all([
+        getStudents(),
+        getRestAlum(),
+        getRestaurantRequests(),
+      ]);
+      const studentMatch = findStudentByEmail(studentsFromApi, authUserEmail);
+      fillProfileFromStudent(studentMatch, authUserEmail);
+
+      if (studentMatch) {
+        const studentIds = getStudentMatchIds(studentMatch);
+        const mappedRelations = relationsFromApi
+          .filter((relation) => studentIds.has(relation.alumniId))
+          .map((relation) => ({
+            id: relation.id,
+            restaurantId: relation.restaurantId || '',
+            role: relation.role || '',
+            currentJob: Boolean(relation.currentJob),
+            isExisting: true,
+          }));
+        setProfileRelations(mappedRelations);
+      } else {
+        setProfileRelations([]);
+      }
+
+      const ownRestaurantRequests = restaurantRequestsFromApi
+        .filter((request) => normalizeEmail(request.requesterEmail) === normalizeEmail(authUserEmail))
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      setProfileRestaurantRequests(ownRestaurantRequests);
+    } catch (profileLoadError) {
+      setProfileError(profileLoadError.message || 'No se pudo cargar tu perfil.');
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const openProfileView = () => {
+    closeAdminModal();
+    setAdminView('profile');
+    loadProfileData();
+  };
+
+  const handleProfilePhoneChange = (index, value) => {
+    setProfilePhones((current) =>
+      current.map((phone, rowIndex) => (rowIndex === index ? value : phone))
+    );
+  };
+
+  const handleAddProfilePhone = () => {
+    setProfilePhones((current) => [...current, '']);
+  };
+
+  const handleRemoveProfilePhone = (index) => {
+    setProfilePhones((current) => current.filter((_, rowIndex) => rowIndex !== index));
+  };
+
+  const handleAddProfileRelationRow = () => {
+    setProfileRelations((current) => [
+      ...current,
+      { restaurantId: '', role: '', currentJob: false, isExisting: false },
+    ]);
+  };
+
+  const updateProfileRelationRow = (index, updates) => {
+    setProfileRelations((current) =>
+      current.map((relation, rowIndex) => (rowIndex === index ? { ...relation, ...updates } : relation))
+    );
+  };
+
+  const handleRemoveProfileRelationRow = (index) => {
+    setProfileRelations((current) => {
+      const target = current[index];
+      if (target?.isExisting && target.id) {
+        setProfileDeletedRelationIds((deleted) =>
+          deleted.includes(target.id) ? deleted : [...deleted, target.id]
+        );
+      }
+      return current.filter((_, rowIndex) => rowIndex !== index);
+    });
+  };
+
+  const handleProfileRestaurantRequestSubmit = async () => {
+    const restaurantName = profileRestaurantRequestName.trim();
+    if (!restaurantName) {
+      setProfileRestaurantRequestError('Indica el nombre del restaurante.');
+      return;
+    }
+
+    const duplicatePending = profileRestaurantRequests.some(
+      (request) =>
+        String(request.restaurantName || '').trim().toLowerCase() === restaurantName.toLowerCase() &&
+        request.status === 'pending'
+    );
+    if (duplicatePending) {
+      setProfileRestaurantRequestError('Ya tienes una solicitud pendiente para este restaurante.');
+      return;
+    }
+
+    setProfileRestaurantRequestLoading(true);
+    setProfileRestaurantRequestError('');
+    setProfileRestaurantRequestMessage('');
+    setProfileRestaurantMapError('');
+
+    try {
+      const latValue = Number(profileRestaurantRequestLat);
+      const lngValue = Number(profileRestaurantRequestLng);
+      const hasLocation = profileRestaurantRequestLat.trim() && profileRestaurantRequestLng.trim();
+
+      const createdRequest = await createRestaurantRequest({
+        requesterEmail: authUserEmail,
+        requesterName: profileName.trim() || authUserEmail,
+        restaurantName,
+        restaurantAddress: profileRestaurantRequestAddress.trim(),
+        restaurantPhone: profileRestaurantRequestPhone.trim(),
+        notes: profileRestaurantRequestNotes.trim(),
+        latitude: hasLocation && Number.isFinite(latValue) ? latValue : undefined,
+        longitude: hasLocation && Number.isFinite(lngValue) ? lngValue : undefined,
+      });
+
+      setProfileRestaurantRequests((current) => [
+        {
+          id: createdRequest.id,
+          requesterEmail: normalizeEmail(authUserEmail),
+          requesterName: profileName.trim() || authUserEmail,
+          restaurantName,
+          restaurantAddress: profileRestaurantRequestAddress.trim(),
+          restaurantPhone: profileRestaurantRequestPhone.trim(),
+          notes: profileRestaurantRequestNotes.trim(),
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          lat: hasLocation && Number.isFinite(latValue) ? latValue : undefined,
+          lng: hasLocation && Number.isFinite(lngValue) ? lngValue : undefined,
+        },
+        ...current,
+      ]);
+
+      setProfileRestaurantRequestName('');
+      setProfileRestaurantRequestAddress('');
+      setProfileRestaurantRequestPhone('');
+      setProfileRestaurantRequestNotes('');
+      setProfileRestaurantRequestLat('');
+      setProfileRestaurantRequestLng('');
+      setProfileRestaurantRequestMessage('Solicitud enviada correctamente.');
+    } catch (requestError) {
+      setProfileRestaurantRequestError(requestError.message || 'No se pudo enviar la solicitud.');
+    } finally {
+      setProfileRestaurantRequestLoading(false);
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!isLoggedIn || !authUserEmail) return;
+    if (!profileName.trim()) {
+      setProfileError('El nombre es obligatorio.');
+      return;
+    }
+
+    const invalidRelation = profileRelations.find((relation) => {
+      const hasRestaurant = Boolean(relation.restaurantId);
+      const hasRole = Boolean(relation.role && relation.role.trim());
+      return (hasRestaurant && !hasRole) || (!hasRestaurant && hasRole);
+    });
+    if (invalidRelation) {
+      setProfileError('Completa restaurante y rol en todas las relaciones.');
+      return;
+    }
+
+    setProfileSaving(true);
+    setProfileError('');
+    setProfileMessage('');
+
+    try {
+      const phones = profilePhones.map((phone) => phone.trim()).filter(Boolean);
+      let targetStudentId = profileStudentId;
+
+      if (profileStudentId) {
+        await updateStudent({
+          id: profileStudentId,
+          name: profileName.trim(),
+          email: authUserEmail,
+          phones,
+          photoUrl: profilePhoto.trim(),
+          linkedIn: profileLinkedIn.trim(),
+          alumni: profileAlumni,
+        });
+      } else {
+        const createdStudent = await createStudent({
+          name: profileName.trim(),
+          email: authUserEmail,
+          phones,
+          photoUrl: profilePhoto.trim(),
+          linkedIn: profileLinkedIn.trim(),
+          alumni: profileAlumni,
+        });
+        targetStudentId = createdStudent.id || '';
+        setProfileStudentId(targetStudentId);
+        await createStudentSignup({
+          studentId: targetStudentId,
+          name: profileName.trim(),
+          email: authUserEmail,
+          source: 'profile',
+          requestedBy: authUserEmail,
+          status: 'approved',
+        });
+      }
+
+      const newRelations = profileRelations.filter(
+        (relation) =>
+          !relation.isExisting &&
+          relation.restaurantId &&
+          relation.role.trim()
+      );
+      const existingRelations = profileRelations.filter(
+        (relation) =>
+          relation.isExisting &&
+          relation.id &&
+          relation.restaurantId &&
+          relation.role.trim()
+      );
+
+      const relationTasks = [];
+
+      if (newRelations.length > 0 && targetStudentId) {
+        relationTasks.push(
+          Promise.all(
+            newRelations.map((relation) => createRestAlum({
+              alumniId: targetStudentId,
+              restaurantId: relation.restaurantId,
+              role: relation.role.trim(),
+              currentJob: relation.currentJob,
+            }))
+          )
+        );
+      }
+
+      if (existingRelations.length > 0 && targetStudentId) {
+        relationTasks.push(
+          Promise.all(
+            existingRelations.map((relation) =>
+              updateRestAlum({
+                id: relation.id,
+                alumniId: targetStudentId,
+                restaurantId: relation.restaurantId,
+                role: relation.role.trim(),
+                currentJob: relation.currentJob,
+              })
+            )
+          )
+        );
+      }
+
+      if (profileDeletedRelationIds.length > 0) {
+        relationTasks.push(
+          Promise.all(profileDeletedRelationIds.map((relationId) => deleteRestAlum(relationId)))
+        );
+      }
+
+      if (relationTasks.length > 0) {
+        await Promise.all(relationTasks);
+      }
+
+      setProfileDeletedRelationIds([]);
+      setReloadToken((value) => value + 1);
+      setAuthUserPhoto(profilePhoto.trim());
+      await loadProfileData();
+      setProfileMessage('Perfil actualizado correctamente.');
+    } catch (profileSaveError) {
+      setProfileError(profileSaveError.message || 'No se pudo guardar tu perfil.');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const handleRequestAccess = async () => {
+    const normalizedEmail = normalizeEmail(requestAccessEmail);
+    const normalizedName = String(requestAccessName || '').trim();
+
+    if (!normalizedEmail) {
+      setAuthError('Introduce un correo.');
+      return;
+    }
+
+    if (!normalizedName) {
+      setAuthError('Introduce nombre y apellidos.');
+      return;
+    }
+
+    setRequestAccessLoading(true);
+    setAuthError('');
+    setRequestAccessMessage('');
+
+    try {
+      const [studentsFromApi, requestsFromApi, emailIsAdmin] = await Promise.all([
+        getStudents(),
+        getAccessRequests(),
+        isAdminEmail(normalizedEmail),
+      ]);
+
+      const existingStudent = findStudentByEmail(studentsFromApi, normalizedEmail);
+      if (existingStudent || emailIsAdmin) {
+        throw new Error('Ese correo ya tiene acceso en la web.');
+      }
+
+      const existingRequest = requestsFromApi.find(
+        (request) =>
+          normalizeEmail(request.email) === normalizedEmail &&
+          request.status !== 'rejected'
+      );
+      if (existingRequest) {
+        throw new Error('Ya existe una solicitud de acceso con este correo.');
+      }
+
+      await createAccessRequest({
+        email: normalizedEmail,
+        fullName: normalizedName,
+      });
+
+      setRequestAccessEmail('');
+      setRequestAccessName('');
+      setRequestAccessMessage('Solicitud enviada. Un administrador revisara tu acceso.');
+    } catch (requestError) {
+      setAuthError(requestError.message || 'No se pudo enviar la solicitud.');
+    } finally {
+      setRequestAccessLoading(false);
+    }
+  };
+
   const handleAuthCheck = async () => {
     const normalizedEmail = authEmail.trim().toLowerCase();
     if (!normalizedEmail) {
@@ -336,19 +1011,42 @@ function App() {
     }
 
     setAuthError('');
+    setRequestAccessMessage('');
     setAuthLoading(true);
 
     try {
+      let authResponse = null;
       if (authMode === 'register') {
-        await registerWithEmailPassword(normalizedEmail, authPassword);
+        authResponse = await registerWithEmailPassword(normalizedEmail, authPassword);
       } else {
-        await signInWithEmailPassword(normalizedEmail, authPassword);
+        authResponse = await signInWithEmailPassword(normalizedEmail, authPassword);
       }
       setIsLoggedIn(true);
       setAuthUserEmail(normalizedEmail);
+      setAuthIdToken(authResponse?.idToken || '');
       setIsAuthOpen(false);
       const admin = await isAdminEmail(normalizedEmail);
       setIsAdmin(admin);
+
+      if (authMode === 'login' && !admin) {
+        const accessRequests = await getAccessRequests();
+        const approvedRequest = getLatestApprovedAccessRequestForEmail(accessRequests, normalizedEmail);
+        const requiresPasswordChange = Boolean(approvedRequest?.mustChangePassword);
+
+        if (approvedRequest?.id && requiresPasswordChange) {
+          setMustChangePasswordRequestId(approvedRequest.id);
+          setMustChangePasswordValue('');
+          setMustChangePasswordConfirm('');
+          setMustChangePasswordError('');
+          setMustChangePasswordOpen(true);
+        } else {
+          setMustChangePasswordOpen(false);
+          setMustChangePasswordRequestId('');
+        }
+      } else {
+        setMustChangePasswordOpen(false);
+        setMustChangePasswordRequestId('');
+      }
     } catch (authErr) {
       setAuthError(authErr.message || 'No se pudo comprobar el correo.');
     } finally {
@@ -356,7 +1054,59 @@ function App() {
     }
   };
 
+  const handleRequiredPasswordChange = async () => {
+    const nextPassword = mustChangePasswordValue.trim();
+    if (!nextPassword) {
+      setMustChangePasswordError('Introduce una nueva contrasena.');
+      return;
+    }
+
+    if (nextPassword.length < 6) {
+      setMustChangePasswordError('La contrasena debe tener al menos 6 caracteres.');
+      return;
+    }
+
+    if (nextPassword !== mustChangePasswordConfirm.trim()) {
+      setMustChangePasswordError('Las contrasenas no coinciden.');
+      return;
+    }
+
+    if (!authIdToken) {
+      setMustChangePasswordError('Tu sesion no es valida. Cierra sesion e inicia de nuevo.');
+      return;
+    }
+
+    setMustChangePasswordLoading(true);
+    setMustChangePasswordError('');
+
+    try {
+      const updateResponse = await updatePasswordWithIdToken(authIdToken, nextPassword);
+      setAuthIdToken(updateResponse?.idToken || authIdToken);
+
+      if (mustChangePasswordRequestId) {
+        await updateAccessRequestStatus({
+          id: mustChangePasswordRequestId,
+          status: 'approved',
+          mustChangePassword: false,
+          updateReviewMetadata: false,
+        });
+      }
+
+      setMustChangePasswordOpen(false);
+      setMustChangePasswordRequestId('');
+      setMustChangePasswordValue('');
+      setMustChangePasswordConfirm('');
+    } catch (changeError) {
+      setMustChangePasswordError(changeError.message || 'No se pudo cambiar la contrasena.');
+    } finally {
+      setMustChangePasswordLoading(false);
+    }
+  };
+
   const handleLogout = () => {
+    const confirmed = window.confirm('Quieres cerrar sesion?');
+    if (!confirmed) return;
+
     setIsLoggedIn(false);
     setAuthEmail('');
     setAuthPassword('');
@@ -364,7 +1114,16 @@ function App() {
     setAuthError('');
     setIsAuthOpen(false);
     setAuthUserEmail('');
+    setAuthIdToken('');
+    setAuthUserPhoto('');
     setIsAdmin(false);
+    setAdminView(null);
+    setMustChangePasswordOpen(false);
+    setMustChangePasswordRequestId('');
+    setMustChangePasswordValue('');
+    setMustChangePasswordConfirm('');
+    setMustChangePasswordError('');
+    setMustChangePasswordLoading(false);
   };
 
   const getDetailValue = (details, keys, fallback = '') => {
@@ -391,6 +1150,34 @@ function App() {
     if (typeof value === 'boolean') return value;
     if (value === 'true' || value === 'false') return value === 'true';
     return fallback;
+  };
+
+  const fillProfileFromStudent = (student, fallbackEmail = '') => {
+    if (!student) {
+      setProfileStudentId('');
+      setProfileName('');
+      setProfilePhones(['']);
+      setProfileLinkedIn('');
+      setProfilePhoto('');
+      setProfileAlumni(true);
+      setProfileRelations([]);
+      setProfileDeletedRelationIds([]);
+      return;
+    }
+
+    const details = student.details || {};
+    setProfileStudentId(student.id || '');
+    setProfileName(getDetailValue(details, ['Name', 'name'], student.name || ''));
+    setProfilePhones(normalizePhoneList(details.Phone ?? details.phone));
+    setProfileLinkedIn(getDetailValue(details, ['LinkedIn', 'linkedin'], ''));
+    setProfilePhoto(
+      getDetailValue(details, ['PhotoURL', 'PhotoUrl', 'photoUrl'], student.photoUrl || '')
+    );
+    setProfileAlumni(normalizeBoolean(details.Alumni ?? details.alumni, true));
+    setProfileDeletedRelationIds([]);
+    if (!authEmail && fallbackEmail) {
+      setAuthEmail(fallbackEmail);
+    }
   };
 
   const ensurePlacesService = async () => {
@@ -685,13 +1472,22 @@ function App() {
     setRestaurantApiLoading(false);
     setRestaurantApiDetails(null);
     setRestaurantApiDetailsLoading(false);
+    setProfileError('');
+    setProfileMessage('');
+    setProfileRestaurantRequestError('');
+    setProfileRestaurantRequestMessage('');
+    setProfileRestaurantMapError('');
   };
 
   const placeAdminMarker = (lat, lng, { flyTo = true } = {}) => {
     if (!adminMapInstanceRef.current || !window.L) return;
+    const joviatMarkerIcon = createJoviatMarkerIcon(window.L);
 
     if (!adminMarkerRef.current) {
-      adminMarkerRef.current = window.L.marker([lat, lng], { draggable: true });
+      adminMarkerRef.current = window.L.marker([lat, lng], {
+        draggable: true,
+        icon: joviatMarkerIcon,
+      });
       adminMarkerRef.current.addTo(adminMapInstanceRef.current);
       adminMarkerRef.current.on('dragend', (event) => {
         const position = event.target.getLatLng();
@@ -700,10 +1496,98 @@ function App() {
       });
     } else {
       adminMarkerRef.current.setLatLng([lat, lng]);
+      adminMarkerRef.current.setIcon(joviatMarkerIcon);
     }
 
     if (flyTo) {
       adminMapInstanceRef.current.setView([lat, lng], 16);
+    }
+  };
+
+  const reverseGeocodeProfileRestaurantRequest = useCallback(async (lat, lng) => {
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`
+      );
+      if (!response.ok) return;
+      const result = await response.json();
+      if (result?.display_name) {
+        setProfileRestaurantRequestAddress(result.display_name);
+      }
+    } catch {
+      // Ignore reverse geocode errors to avoid blocking the user flow.
+    }
+  }, []);
+
+  const placeProfileRequestMarker = useCallback((lat, lng, { flyTo = true } = {}) => {
+    if (!profileRequestMapInstanceRef.current || !window.L) return;
+    const joviatMarkerIcon = createJoviatMarkerIcon(window.L);
+
+    if (!profileRequestMarkerRef.current) {
+      profileRequestMarkerRef.current = window.L.marker([lat, lng], {
+        draggable: true,
+        icon: joviatMarkerIcon,
+      });
+      profileRequestMarkerRef.current.addTo(profileRequestMapInstanceRef.current);
+      profileRequestMarkerRef.current.on('dragend', (event) => {
+        const position = event.target.getLatLng();
+        const nextLat = position.lat.toFixed(6);
+        const nextLng = position.lng.toFixed(6);
+        setProfileRestaurantRequestLat(nextLat);
+        setProfileRestaurantRequestLng(nextLng);
+        reverseGeocodeProfileRestaurantRequest(nextLat, nextLng);
+      });
+    } else {
+      profileRequestMarkerRef.current.setLatLng([lat, lng]);
+      profileRequestMarkerRef.current.setIcon(joviatMarkerIcon);
+    }
+
+    if (flyTo) {
+      profileRequestMapInstanceRef.current.setView([lat, lng], 16);
+    }
+  }, [reverseGeocodeProfileRestaurantRequest]);
+
+  const handleProfileRestaurantMapSearch = async () => {
+    const query = profileRestaurantRequestAddress.trim();
+    if (!query) {
+      setProfileRestaurantMapError('Introduce una direccion para buscar en el mapa.');
+      return;
+    }
+
+    setProfileRestaurantMapSearchLoading(true);
+    setProfileRestaurantMapError('');
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`
+      );
+      if (!response.ok) {
+        throw new Error('No se pudo buscar la direccion en el mapa.');
+      }
+
+      const results = await response.json();
+      if (!Array.isArray(results) || results.length === 0) {
+        throw new Error('No se encontraron resultados para esta direccion.');
+      }
+
+      const result = results[0];
+      const lat = Number(result.lat);
+      const lng = Number(result.lon);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        throw new Error('El resultado no tiene coordenadas validas.');
+      }
+
+      setProfileRestaurantRequestLat(lat.toFixed(6));
+      setProfileRestaurantRequestLng(lng.toFixed(6));
+      if (result.display_name) {
+        setProfileRestaurantRequestAddress(result.display_name);
+      }
+      placeProfileRequestMarker(lat, lng, { flyTo: true });
+    } catch (searchError) {
+      setProfileRestaurantMapError(searchError.message || 'No se pudo buscar la direccion en el mapa.');
+    } finally {
+      setProfileRestaurantMapSearchLoading(false);
     }
   };
 
@@ -784,7 +1668,7 @@ function App() {
       return (hasRestaurant && !hasRole) || (!hasRestaurant && hasRole);
     });
     if (invalidRelation) {
-      setAdminError('Completa la tienda y el rol en todas las relaciones.');
+      setAdminError('Completa el restaurante y el rol en todas las relaciones.');
       return;
     }
 
@@ -805,6 +1689,14 @@ function App() {
           alumni: newStudentAlumni,
         });
         targetStudentId = createdStudent.id;
+        await createStudentSignup({
+          studentId: createdStudent.id,
+          name: newStudentName.trim(),
+          email: newStudentEmail.trim(),
+          source: 'admin',
+          requestedBy: authUserEmail,
+          status: 'approved',
+        });
       } else {
         if (!editingStudentId) {
           throw new Error('No se pudo identificar el alumno.');
@@ -915,7 +1807,7 @@ function App() {
     try {
       if (adminMode === 'edit') {
         if (!editingRestaurantId) {
-          throw new Error('No se pudo identificar la tienda.');
+          throw new Error('No se pudo identificar el restaurante.');
         }
         await updateRestaurant({
           id: editingRestaurantId,
@@ -948,7 +1840,7 @@ function App() {
       setReloadToken((value) => value + 1);
       closeAdminModal();
     } catch (adminErr) {
-      setAdminError(adminErr.message || 'No se pudo guardar la tienda.');
+      setAdminError(adminErr.message || 'No se pudo guardar el restaurante.');
     } finally {
       setAdminLoading(false);
     }
@@ -996,7 +1888,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [adminModalOpen, adminModalType]);
+  }, [adminModalOpen, adminModalType, newRestaurantLat, newRestaurantLng]);
 
   useEffect(() => {
     if (!adminMapInstanceRef.current || !window.L) return;
@@ -1020,9 +1912,91 @@ function App() {
     adminMarkerRef.current = null;
   }, [adminModalOpen, adminModalType]);
 
-  const openAuthModal = (mode) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    const shouldShowProfileMap = isLoggedIn && adminView === 'profile' && !adminModalOpen;
+    if (!shouldShowProfileMap) return undefined;
+    if (!profileRequestMapRef.current) return undefined;
+
+    const initProfileRequestMap = async () => {
+      try {
+        await loadLeafletAssets();
+        if (cancelled || !profileRequestMapRef.current || profileRequestMapInstanceRef.current || !window.L) return;
+
+        const map = window.L.map(profileRequestMapRef.current).setView(BARCELONA_CENTER, 13);
+        window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap contributors',
+        }).addTo(map);
+
+        map.on('click', (event) => {
+          const { lat, lng } = event.latlng;
+          const nextLat = lat.toFixed(6);
+          const nextLng = lng.toFixed(6);
+          setProfileRestaurantRequestLat(nextLat);
+          setProfileRestaurantRequestLng(nextLng);
+          setProfileRestaurantMapError('');
+          placeProfileRequestMarker(lat, lng, { flyTo: false });
+          reverseGeocodeProfileRestaurantRequest(nextLat, nextLng);
+        });
+
+        profileRequestMapInstanceRef.current = map;
+
+        if (profileRestaurantRequestLat && profileRestaurantRequestLng) {
+          placeProfileRequestMarker(Number(profileRestaurantRequestLat), Number(profileRestaurantRequestLng), { flyTo: true });
+        }
+
+        setTimeout(() => {
+          map.invalidateSize();
+        }, 0);
+      } catch {
+        setProfileRestaurantMapError('No se pudo cargar el mapa de direccion.');
+      }
+    };
+
+    initProfileRequestMap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isLoggedIn,
+    adminView,
+    adminModalOpen,
+    profileRestaurantRequestLat,
+    profileRestaurantRequestLng,
+    placeProfileRequestMarker,
+    reverseGeocodeProfileRestaurantRequest,
+  ]);
+
+  useEffect(() => {
+    if (!profileRequestMapInstanceRef.current || !window.L) return;
+    const lat = Number(profileRestaurantRequestLat);
+    const lng = Number(profileRestaurantRequestLng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    placeProfileRequestMarker(lat, lng, { flyTo: false });
+  }, [profileRestaurantRequestLat, profileRestaurantRequestLng, placeProfileRequestMarker]);
+
+  useEffect(() => {
+    const shouldShowProfileMap = isLoggedIn && adminView === 'profile' && !adminModalOpen;
+    if (shouldShowProfileMap) return;
+
+    if (profileRequestMapInstanceRef.current) {
+      profileRequestMapInstanceRef.current.off();
+      profileRequestMapInstanceRef.current.remove();
+      profileRequestMapInstanceRef.current = null;
+    }
+    profileRequestMarkerRef.current = null;
+  }, [isLoggedIn, adminView, adminModalOpen]);
+
+  const switchAuthMode = (mode) => {
     setAuthMode(mode);
     setAuthError('');
+    setRequestAccessMessage('');
+  };
+
+  const openAuthModal = (mode) => {
+    switchAuthMode(mode);
     setIsAuthOpen(true);
   };
 
@@ -1034,7 +2008,7 @@ function App() {
             className="menu-toggle"
             type="button"
             onClick={() => setIsMenuOpen((currentState) => !currentState)}
-            aria-label="Abrir o cerrar menú lateral"
+            aria-label="Abrir o cerrar menÃº lateral"
             aria-expanded={isMenuOpen}
             aria-controls="left-sidebar-menu"
           >
@@ -1042,6 +2016,18 @@ function App() {
           </button>
         )}
         <img src={logo} className="top-bar-logo" alt="Logo Joviat" />
+        {isLoggedIn && (
+          <div className="top-bar-user" title={authUserEmail}>
+            {!isAdmin && (
+              <img
+                src={authUserPhoto || defaultAvatar}
+                alt="Avatar usuario"
+                className="top-bar-avatar"
+              />
+            )}
+            <p className="top-bar-email">{authUserEmail}</p>
+          </div>
+        )}
       </header>
 
       <aside
@@ -1049,54 +2035,98 @@ function App() {
         className={`left-sidebar ${isSidebarVisible ? 'open' : ''}`}
         aria-hidden={!isSidebarVisible}
       >
-        <h2 className="sidebar-title">Menú</h2>
+        <div className="language-panel">
+          <label htmlFor="language-select" className="language-label">{uiText.language}</label>
+          <select
+            id="language-select"
+            className="language-select"
+            value={language}
+            onChange={(event) => setLanguage(event.target.value)}
+          >
+            {LANGUAGE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <h2 className="sidebar-title">{uiText.menuTitle}</h2>
         <nav>
           <ul className="sidebar-links">
             <li>
               <button
                 type="button"
-                className={`sidebar-button ${activeSection === 'home' ? 'active' : ''}`}
+                className={`sidebar-button ${isSidebarButtonActive('home') ? 'active' : ''}`}
                 onClick={() => handleSectionChange('home')}
               >
-                Inicio
+                {uiText.home}
               </button>
             </li>
             <li>
               <button
                 type="button"
-                className={`sidebar-button ${activeSection === 'students' ? 'active' : ''}`}
+                className={`sidebar-button ${isSidebarButtonActive('students') ? 'active' : ''}`}
                 onClick={() => handleSectionChange('students')}
               >
-                Alumnos
+                {uiText.students}
               </button>
             </li>
             <li>
               <button
                 type="button"
-                className={`sidebar-button ${activeSection === 'shops' ? 'active' : ''}`}
+                className={`sidebar-button ${isSidebarButtonActive('shops') ? 'active' : ''}`}
                 onClick={() => handleSectionChange('shops')}
               >
-                Tiendas
+                {uiText.shops}
               </button>
             </li>
+            {isLoggedIn && !isAdmin && (
+              <li>
+                <button
+                  type="button"
+                  className={`sidebar-button ${isSidebarButtonActive('profile') ? 'active' : ''}`}
+                  onClick={openProfileView}
+                >
+                  {uiText.editProfile}
+                </button>
+              </li>
+            )}
             {isAdmin && (
               <>
                 <li>
                   <button
                     type="button"
-                    className={`sidebar-button ${adminView === 'student' ? 'active' : ''}`}
+                    className={`sidebar-button ${isSidebarButtonActive('student') ? 'active' : ''}`}
                     onClick={() => openAdminModal('student')}
                   >
-                    Anadir alumno
+                    {uiText.addStudent}
                   </button>
                 </li>
                 <li>
                   <button
                     type="button"
-                    className={`sidebar-button ${adminView === 'restaurant' ? 'active' : ''}`}
+                    className={`sidebar-button ${isSidebarButtonActive('restaurant') ? 'active' : ''}`}
                     onClick={() => openAdminModal('restaurant')}
                   >
-                    Anadir tienda
+                    {uiText.addShop}
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    className={`sidebar-button ${isSidebarButtonActive('profile') ? 'active' : ''}`}
+                    onClick={openProfileView}
+                  >
+                    {uiText.editProfile}
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    className={`sidebar-button ${isSidebarButtonActive('manage') ? 'active' : ''}`}
+                    onClick={openManageView}
+                  >
+                    {uiText.manageRequests}
                   </button>
                 </li>
               </>
@@ -1110,7 +2140,7 @@ function App() {
               className="auth-button"
               onClick={handleLogout}
             >
-              Logout {authUserEmail ? `(${authUserEmail})` : ''}
+              {uiText.logout}
             </button>
           ) : (
             <>
@@ -1119,14 +2149,14 @@ function App() {
                 className="auth-button"
                 onClick={() => openAuthModal('login')}
               >
-                Login
+                {uiText.login}
               </button>
               <button
                 type="button"
                 className="auth-button auth-button-secondary"
-                onClick={() => openAuthModal('register')}
+                onClick={() => openAuthModal('request')}
               >
-                Registrarse
+                {uiText.requestAccess}
               </button>
             </>
           )}
@@ -1145,8 +2175,8 @@ function App() {
                       ? 'Editar alumno'
                       : 'Crear alumno'
                     : adminMode === 'edit'
-                      ? 'Editar tienda'
-                      : 'Crear tienda'}
+                      ? 'Editar restaurante'
+                      : 'Crear restaurante'}
                 </h2>
                 <p>
                   {adminModalType === 'student'
@@ -1154,15 +2184,15 @@ function App() {
                       ? 'Actualiza los datos del alumno y revisa su informacion.'
                       : 'Registra un nuevo alumno y verifica su informacion.'
                     : adminMode === 'edit'
-                      ? 'Actualiza los datos de la tienda y revisa los detalles.'
-                      : 'Registra una nueva tienda y completa los datos clave.'}
+                      ? 'Actualiza los datos del restaurante y revisa los detalles.'
+                      : 'Registra un nuevo restaurante y completa los datos clave.'}
                 </p>
               </div>
             </div>
             <div className="admin-form-layout">
               <div className="admin-form-card">
                 <div className="admin-form-card-header">
-                  <h3>{adminModalType === 'student' ? 'Datos personales' : 'Datos de la tienda'}</h3>
+                  <h3>{adminModalType === 'student' ? 'Datos personales' : 'Datos del restaurante'}</h3>
                 </div>
                 {adminModalType === 'student' ? (
                   <>
@@ -1297,7 +2327,7 @@ function App() {
         >
           <div className="admin-relation-field">
             <label className="admin-label" htmlFor={`relation-restaurant-${index}`}>
-              Tienda
+              Restaurante
             </label>
             <select
               id={`relation-restaurant-${index}`}
@@ -1305,7 +2335,7 @@ function App() {
               value={relation.restaurantId}
               onChange={(event) => updateRelationRow(index, { restaurantId: event.target.value })}
             >
-              <option value="">Selecciona una tienda</option>
+              <option value="">Selecciona un restaurante</option>
               {restaurantsOptions.map((restaurant) => (
                 <option key={restaurant.id} value={restaurant.id}>
                                   {restaurant.name}
@@ -1499,7 +2529,7 @@ function App() {
                       </p>
                       {newRestaurantLat && newRestaurantLng && (
                         <p className="admin-map-coords">
-                          Lat: {newRestaurantLat} · Lng: {newRestaurantLng}
+                          Lat: {newRestaurantLat} Â· Lng: {newRestaurantLng}
                         </p>
                       )}
                     </div>
@@ -1515,7 +2545,7 @@ function App() {
                           ? 'Guardando...'
                           : adminMode === 'edit'
                             ? 'Guardar cambios'
-                            : 'Guardar tienda'}
+                            : 'Guardar restaurante'}
                       </button>
                     </div>
                   </>
@@ -1525,7 +2555,13 @@ function App() {
             </div>
           </div>
         )}
-        {!adminView && activeSection === 'home' && <HomeView />}
+        {!adminView && activeSection === 'home' && (
+          <HomeView
+            onExploreStudents={() => handleSectionChange('students')}
+            onExploreShops={() => handleSectionChange('shops')}
+            language={language}
+          />
+        )}
         {!adminView && activeSection === 'students' && (
           <StudentsView
             selectedStudentId={selectedStudentId}
@@ -1549,12 +2585,421 @@ function App() {
             reloadToken={reloadToken}
           />
         )}
+        {isAdmin && adminView === 'manage' && !adminModalOpen && (
+          <section className="admin-form-shell">
+            <div className="admin-form-header">
+              <div className="admin-form-heading">
+                <h2>Gestionar altas</h2>
+                <p>Revisa solicitudes de acceso y altas de alumnos registradas en Firebase.</p>
+              </div>
+            </div>
+            {manageError && <p className="auth-error">{manageError}</p>}
+            <div className="admin-form-layout">
+              <div className="admin-form-card">
+                <div className="admin-form-card-header">
+                  <h3>Solicitudes pendientes</h3>
+                </div>
+                {manageLoading ? (
+                  <p>Cargando solicitudes...</p>
+                ) : (
+                  <>
+                    {accessRequests.filter((request) => request.status === 'pending').length === 0 ? (
+                      <p>No hay solicitudes pendientes.</p>
+                    ) : (
+                      <ul className="manage-list">
+                        {accessRequests
+                          .filter((request) => request.status === 'pending')
+                          .map((request) => (
+                            <li key={request.id} className="manage-item">
+                              <div>
+                                <p className="manage-item-title">{request.fullName || 'Sin nombre'}</p>
+                                <p className="manage-item-meta">{request.email}</p>
+                              </div>
+                              <div className="manage-item-actions">
+                                <button
+                                  type="button"
+                                  className="auth-submit"
+                                  onClick={() => handleAccessRequestReview(request, 'approved')}
+                                >
+                                  Aprobar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="admin-remove-row"
+                                  onClick={() => handleAccessRequestReview(request, 'rejected')}
+                                >
+                                  Rechazar
+                                </button>
+                              </div>
+                            </li>
+                          ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="admin-form-card">
+                <div className="admin-form-card-header">
+                  <h3>Solicitudes de restaurantes</h3>
+                </div>
+                {manageLoading ? (
+                  <p>Cargando solicitudes de restaurantes...</p>
+                ) : (
+                  <>
+                    {restaurantRequests.filter((request) => request.status === 'pending').length === 0 ? (
+                      <p>No hay solicitudes de restaurantes pendientes.</p>
+                    ) : (
+                      <ul className="manage-list">
+                        {restaurantRequests
+                          .filter((request) => request.status === 'pending')
+                          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+                          .map((request) => (
+                            <li key={request.id} className="manage-item">
+                              <div>
+                                <p className="manage-item-title">{request.restaurantName || 'Sin nombre'}</p>
+                                <p className="manage-item-meta">{request.restaurantAddress || '-'}</p>
+                                <p className="manage-item-meta">
+                                  Solicita: {request.requesterName || 'Sin nombre'} ({request.requesterEmail || '-'})
+                                </p>
+                              </div>
+                              <div className="manage-item-actions">
+                                <button
+                                  type="button"
+                                  className="auth-submit"
+                                  onClick={() => handleRestaurantRequestReview(request, 'approved')}
+                                >
+                                  Aprobar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="admin-remove-row"
+                                  onClick={() => handleRestaurantRequestReview(request, 'rejected')}
+                                >
+                                  Rechazar
+                                </button>
+                              </div>
+                            </li>
+                          ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="admin-form-card">
+                <div className="admin-form-card-header">
+                  <h3>Altas de alumnos</h3>
+                </div>
+                {manageLoading ? (
+                  <p>Cargando altas...</p>
+                ) : (
+                  <>
+                    {studentSignups.length === 0 ? (
+                      <p>No hay altas registradas.</p>
+                    ) : (
+                      <ul className="manage-list">
+                        {studentSignups
+                          .slice()
+                          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+                          .map((signup) => (
+                            <li key={signup.id} className="manage-item">
+                              <div>
+                                <p className="manage-item-title">{signup.name}</p>
+                                <p className="manage-item-meta">{signup.email}</p>
+                              </div>
+                              <p className={`manage-status manage-status-${signup.status || 'pending'}`}>
+                                {signup.status || 'pending'}
+                              </p>
+                            </li>
+                          ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+                <div className="admin-form-actions">
+                  <button type="button" className="auth-submit" onClick={() => openAdminModal('student')}>
+                    Alta nuevo alumno
+                  </button>
+                  <button type="button" className="auth-submit" onClick={() => openAdminModal('restaurant')}>
+                    Alta nuevo restaurante
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+        {isLoggedIn && adminView === 'profile' && !adminModalOpen && (
+          <section className="admin-form-shell">
+            <div className="admin-form-header">
+              <div className="admin-form-heading">
+                <h2>Editar perfil</h2>
+                <p>Actualiza tus datos personales y de contacto.</p>
+              </div>
+            </div>
+            {profileError && <p className="auth-error">{profileError}</p>}
+            {profileMessage && <p className="manage-status manage-status-approved">{profileMessage}</p>}
+            <div className="admin-form-layout">
+              <div className="admin-form-card">
+                {profileLoading ? (
+                  <p>Cargando perfil...</p>
+                ) : (
+                  <>
+                    <label className="admin-label" htmlFor="profile-name">Nombre completo</label>
+                    <input
+                      id="profile-name"
+                      className="admin-input"
+                      type="text"
+                      value={profileName}
+                      onChange={(event) => setProfileName(event.target.value)}
+                    />
+                    <label className="admin-label" htmlFor="profile-email">Email</label>
+                    <input
+                      id="profile-email"
+                      className="admin-input"
+                      type="email"
+                      value={authUserEmail}
+                      disabled
+                    />
+                    <label className="admin-label" htmlFor="profile-linkedin">LinkedIn</label>
+                    <input
+                      id="profile-linkedin"
+                      className="admin-input"
+                      type="text"
+                      value={profileLinkedIn}
+                      onChange={(event) => setProfileLinkedIn(event.target.value)}
+                    />
+                    <label className="admin-label" htmlFor="profile-photo">Photo URL</label>
+                    <input
+                      id="profile-photo"
+                      className="admin-input"
+                      type="text"
+                      value={profilePhoto}
+                      onChange={(event) => setProfilePhoto(event.target.value)}
+                    />
+                    <label className="admin-label" htmlFor="profile-phone-0">Telefono</label>
+                    <div className="admin-phone-list">
+                      {profilePhones.map((phone, index) => (
+                        <div key={`profile-phone-${index}`} className="admin-phone-row">
+                          <input
+                            id={`profile-phone-${index}`}
+                            className="admin-input"
+                            type="text"
+                            value={phone}
+                            onChange={(event) => handleProfilePhoneChange(index, event.target.value)}
+                          />
+                          {profilePhones.length > 1 && (
+                            <button
+                              type="button"
+                              className="admin-remove-row"
+                              onClick={() => handleRemoveProfilePhone(index)}
+                            >
+                              Quitar
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button type="button" className="admin-add-row" onClick={handleAddProfilePhone}>
+                        + Anadir telefono
+                      </button>
+                    </div>
+                    <div className="admin-toggle">
+                      <div>
+                        <p className="admin-toggle-title">Estado alumni</p>
+                        <p className="admin-toggle-subtitle">Indica si estas actualmente en la red alumni.</p>
+                      </div>
+                      <label className="switch">
+                        <input
+                          type="checkbox"
+                          checked={profileAlumni}
+                          onChange={(event) => setProfileAlumni(event.target.checked)}
+                        />
+                        <span className="slider" />
+                      </label>
+                    </div>
+                    <div className="admin-form-section">
+                      <div className="admin-form-section-header">
+                        <h4>Trabajo en restaurantes</h4>
+                        <button
+                          type="button"
+                          className="admin-add-row"
+                          onClick={handleAddProfileRelationRow}
+                        >
+                          + Anadir restaurante
+                        </button>
+                      </div>
+                      {profileRelations.length === 0 ? (
+                        <p>No tienes relaciones registradas.</p>
+                      ) : (
+                        profileRelations.map((relation, index) => (
+                          <div
+                            key={relation.id ? `profile-relation-${relation.id}` : `profile-relation-${index}`}
+                            className="admin-relation-row"
+                          >
+                            <div className="admin-relation-field">
+                              <label className="admin-label" htmlFor={`profile-relation-restaurant-${index}`}>
+                                Restaurante
+                              </label>
+                              <select
+                                id={`profile-relation-restaurant-${index}`}
+                                className="admin-input"
+                                value={relation.restaurantId}
+                                onChange={(event) => updateProfileRelationRow(index, { restaurantId: event.target.value })}
+                              >
+                                <option value="">Selecciona un restaurante</option>
+                                {restaurantsOptions.map((restaurant) => (
+                                  <option key={restaurant.id} value={restaurant.id}>
+                                    {restaurant.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="admin-relation-field">
+                              <label className="admin-label" htmlFor={`profile-relation-role-${index}`}>
+                                Rol
+                              </label>
+                              <input
+                                id={`profile-relation-role-${index}`}
+                                className="admin-input"
+                                type="text"
+                                placeholder="Cocinero/a"
+                                value={relation.role}
+                                onChange={(event) => updateProfileRelationRow(index, { role: event.target.value })}
+                              />
+                            </div>
+                            <label className="admin-relation-toggle">
+                              <input
+                                type="checkbox"
+                                checked={relation.currentJob}
+                                onChange={(event) => updateProfileRelationRow(index, { currentJob: event.target.checked })}
+                              />
+                              Trabajo actual
+                            </label>
+                            {(relation.isExisting || profileRelations.length > 1) && (
+                              <button
+                                type="button"
+                                className="admin-remove-row"
+                                onClick={() => handleRemoveProfileRelationRow(index)}
+                              >
+                                {relation.isExisting ? 'Eliminar' : 'Quitar'}
+                              </button>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <div className="admin-form-section">
+                      <div className="admin-form-section-header">
+                        <h4>Solicitar restaurante</h4>
+                      </div>
+                      <label className="admin-label" htmlFor="profile-request-restaurant-name">Nombre</label>
+                      <input
+                        id="profile-request-restaurant-name"
+                        className="admin-input"
+                        type="text"
+                        placeholder="Nombre del restaurante"
+                        value={profileRestaurantRequestName}
+                        onChange={(event) => setProfileRestaurantRequestName(event.target.value)}
+                      />
+                      <div className="admin-grid">
+                        <div>
+                          <label className="admin-label" htmlFor="profile-request-restaurant-address">Direccion</label>
+                          <input
+                            id="profile-request-restaurant-address"
+                            className="admin-input"
+                            type="text"
+                            placeholder="Calle Principal, 12"
+                            value={profileRestaurantRequestAddress}
+                            onChange={(event) => {
+                              setProfileRestaurantRequestAddress(event.target.value);
+                              setProfileRestaurantMapError('');
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="admin-label" htmlFor="profile-request-restaurant-phone">Telefono</label>
+                          <input
+                            id="profile-request-restaurant-phone"
+                            className="admin-input"
+                            type="text"
+                            placeholder="612 25 49 25"
+                            value={profileRestaurantRequestPhone}
+                            onChange={(event) => setProfileRestaurantRequestPhone(event.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div className="admin-map-section">
+                        <div className="admin-map-search-row">
+                          <button
+                            type="button"
+                            className="admin-map-search-button"
+                            onClick={handleProfileRestaurantMapSearch}
+                            disabled={profileRestaurantMapSearchLoading}
+                          >
+                            {profileRestaurantMapSearchLoading ? 'Buscando...' : 'Ubicar direccion en mapa'}
+                          </button>
+                        </div>
+                        <p className="admin-map-hint">
+                          Puedes marcar la direccion haciendo click en el mapa o buscando la direccion escrita.
+                        </p>
+                        <div className="admin-map" ref={profileRequestMapRef} />
+                        {profileRestaurantRequestLat && profileRestaurantRequestLng && (
+                          <p className="admin-map-coords">
+                            Lat: {profileRestaurantRequestLat} · Lng: {profileRestaurantRequestLng}
+                          </p>
+                        )}
+                        {profileRestaurantMapError && <p className="auth-error">{profileRestaurantMapError}</p>}
+                      </div>
+                      <label className="admin-label" htmlFor="profile-request-restaurant-notes">Notas</label>
+                      <textarea
+                        id="profile-request-restaurant-notes"
+                        className="admin-input"
+                        rows={3}
+                        placeholder="Comentario opcional para el equipo admin"
+                        value={profileRestaurantRequestNotes}
+                        onChange={(event) => setProfileRestaurantRequestNotes(event.target.value)}
+                      />
+                      {profileRestaurantRequestError && <p className="auth-error">{profileRestaurantRequestError}</p>}
+                      {profileRestaurantRequestMessage && (
+                        <p className="manage-status manage-status-approved">{profileRestaurantRequestMessage}</p>
+                      )}
+                      <div className="admin-form-actions">
+                        <button
+                          type="button"
+                          className="auth-submit"
+                          onClick={handleProfileRestaurantRequestSubmit}
+                          disabled={profileRestaurantRequestLoading}
+                        >
+                          {profileRestaurantRequestLoading ? 'Enviando...' : 'Enviar solicitud'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="admin-form-actions">
+                      <button
+                        type="button"
+                        className="auth-submit"
+                        onClick={handleSaveProfile}
+                        disabled={profileSaving}
+                      >
+                        {profileSaving ? 'Guardando...' : 'Guardar perfil'}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
       </main>
       {isAuthOpen && (
         <div className="auth-modal-backdrop" role="dialog" aria-modal="true">
           <div className="auth-modal">
             <div className="auth-modal-header">
-              <h2>{authMode === 'register' ? 'Crear cuenta' : 'Iniciar sesion'}</h2>
+              <h2>
+                {authMode === 'register'
+                  ? 'Crear cuenta'
+                  : authMode === 'request'
+                    ? 'Solicitar acceso'
+                    : 'Iniciar sesion'}
+              </h2>
               <button
                 type="button"
                 className="auth-close"
@@ -1568,63 +3013,130 @@ function App() {
               <button
                 type="button"
                 className={`auth-tab ${authMode === 'login' ? 'active' : ''}`}
-                onClick={() => setAuthMode('login')}
+                onClick={() => switchAuthMode('login')}
               >
                 Login
               </button>
               <button
                 type="button"
-                className={`auth-tab ${authMode === 'register' ? 'active' : ''}`}
-                onClick={() => setAuthMode('register')}
+                className={`auth-tab ${authMode === 'request' ? 'active' : ''}`}
+                onClick={() => switchAuthMode('request')}
               >
-                Registrarse
+                Solicitar acceso
               </button>
             </div>
-            <label htmlFor="auth-email" className="search-label">Correo</label>
-            <input
-              id="auth-email"
-              type="email"
-              className="search-input"
-              placeholder="correo@dominio.com"
-              value={authEmail}
-              onChange={(event) => setAuthEmail(event.target.value)}
-            />
-            <label htmlFor="auth-password" className="search-label">Contrasena</label>
-            <input
-              id="auth-password"
-              type="password"
-              className="search-input"
-              placeholder="Minimo 6 caracteres"
-              value={authPassword}
-              onChange={(event) => setAuthPassword(event.target.value)}
-            />
-            {authMode === 'register' && (
+            {authMode === 'request' ? (
               <>
-                <label htmlFor="auth-password-confirm" className="search-label">
-                  Confirmar contrasena
-                </label>
+                <label htmlFor="request-access-email" className="search-label">Correo</label>
                 <input
-                  id="auth-password-confirm"
-                  type="password"
+                  id="request-access-email"
+                  type="email"
                   className="search-input"
-                  placeholder="Repite la contrasena"
-                  value={authPasswordConfirm}
-                  onChange={(event) => setAuthPasswordConfirm(event.target.value)}
+                  placeholder="correo@dominio.com"
+                  value={requestAccessEmail}
+                  onChange={(event) => setRequestAccessEmail(event.target.value)}
+                />
+                <label htmlFor="request-access-name" className="search-label">Nombre y apellidos</label>
+                <input
+                  id="request-access-name"
+                  type="text"
+                  className="search-input"
+                  placeholder="Nombre Apellidos"
+                  value={requestAccessName}
+                  onChange={(event) => setRequestAccessName(event.target.value)}
                 />
               </>
+            ) : (
+              <>
+                <label htmlFor="auth-email" className="search-label">Correo</label>
+                <input
+                  id="auth-email"
+                  type="email"
+                  className="search-input"
+                  placeholder="correo@dominio.com"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                />
+                <label htmlFor="auth-password" className="search-label">Contrasena</label>
+                <input
+                  id="auth-password"
+                  type="password"
+                  className="search-input"
+                  placeholder="Minimo 6 caracteres"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                />
+                {authMode === 'register' && (
+                  <>
+                    <label htmlFor="auth-password-confirm" className="search-label">
+                      Confirmar contrasena
+                    </label>
+                    <input
+                      id="auth-password-confirm"
+                      type="password"
+                      className="search-input"
+                      placeholder="Repite la contrasena"
+                      value={authPasswordConfirm}
+                      onChange={(event) => setAuthPasswordConfirm(event.target.value)}
+                    />
+                  </>
+                )}
+              </>
             )}
+            {requestAccessMessage && <p className="manage-status manage-status-approved">{requestAccessMessage}</p>}
             {authError && <p className="auth-error">{authError}</p>}
             <button
               type="button"
               className="auth-submit"
-              onClick={handleAuthCheck}
-              disabled={authLoading}
+              onClick={authMode === 'request' ? handleRequestAccess : handleAuthCheck}
+              disabled={authMode === 'request' ? requestAccessLoading : authLoading}
             >
-              {authLoading
+              {(authMode === 'request' ? requestAccessLoading : authLoading)
                 ? 'Comprobando...'
                 : authMode === 'register'
                   ? 'Registrarse'
-                  : 'Entrar'}
+                  : authMode === 'request'
+                    ? 'Enviar solicitud'
+                    : 'Entrar'}
+            </button>
+          </div>
+        </div>
+      )}
+      {mustChangePasswordOpen && (
+        <div className="auth-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="auth-modal">
+            <div className="auth-modal-header">
+              <h2>Cambio obligatorio de contrasena</h2>
+            </div>
+            <p className="admin-map-hint">
+              Es tu primer acceso. Debes cambiar la contrasena provisional para continuar.
+            </p>
+            <label htmlFor="required-password" className="search-label">Nueva contrasena</label>
+            <input
+              id="required-password"
+              type="password"
+              className="search-input"
+              placeholder="Minimo 6 caracteres"
+              value={mustChangePasswordValue}
+              onChange={(event) => setMustChangePasswordValue(event.target.value)}
+            />
+            <label htmlFor="required-password-confirm" className="search-label">Confirmar contrasena</label>
+            <input
+              id="required-password-confirm"
+              type="password"
+              className="search-input"
+              placeholder="Repite la contrasena"
+              value={mustChangePasswordConfirm}
+              onChange={(event) => setMustChangePasswordConfirm(event.target.value)}
+            />
+            {mustChangePasswordError && <p className="auth-error">{mustChangePasswordError}</p>}
+            <button
+              type="button"
+              className="auth-submit"
+              onClick={handleRequiredPasswordChange}
+              disabled={mustChangePasswordLoading}
+            >
+              {mustChangePasswordLoading ? 'Guardando...' : 'Guardar nueva contrasena'}
             </button>
           </div>
         </div>

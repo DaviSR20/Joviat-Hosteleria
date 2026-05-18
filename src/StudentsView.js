@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import defaultAvatar from './Imatges/default-avatar-profile.jpg';
 import { getRestAlum, getRestaurants, getStudents } from './firestoreApi';
 
+const STUDENTS_PER_PAGE = 8;
+
 function StudentsView({
   selectedStudentId: controlledStudentId,
   onSelectStudent,
@@ -16,6 +18,7 @@ function StudentsView({
   const [restaurants, setRestaurants] = useState([]);
   const [restAlum, setRestAlum] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [internalSelectedStudentId, setInternalSelectedStudentId] = useState(null);
@@ -30,6 +33,21 @@ function StudentsView({
 
     return students.filter((student) => student.name.toLowerCase().includes(normalizedSearch));
   }, [students, searchTerm]);
+
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredStudents.length / STUDENTS_PER_PAGE)),
+    [filteredStudents.length]
+  );
+
+  useEffect(() => {
+    if (currentPage <= totalPages) return;
+    setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const paginatedStudents = useMemo(() => {
+    const start = (currentPage - 1) * STUDENTS_PER_PAGE;
+    return filteredStudents.slice(start, start + STUDENTS_PER_PAGE);
+  }, [filteredStudents, currentPage]);
 
   const selectedStudent = useMemo(() => {
     if (!selectedStudentId) return null;
@@ -119,6 +137,7 @@ function StudentsView({
   useEffect(() => {
     if (selectedStudentId) {
       setSearchTerm('');
+      setCurrentPage(1);
     }
   }, [selectedStudentId]);
 
@@ -259,6 +278,16 @@ function StudentsView({
     setSelectedStudentId(null);
   };
 
+  const handleSearchChange = (value) => {
+    setSearchTerm(value);
+    setCurrentPage(1);
+  };
+
+  const handlePageChange = (nextPage) => {
+    const normalized = Math.min(totalPages, Math.max(1, nextPage));
+    setCurrentPage(normalized);
+  };
+
   if (loading) return <p>Cargando alumnos...</p>;
   if (error) return <p>{error}</p>;
 
@@ -364,12 +393,12 @@ function StudentsView({
                 className="search-input"
                 placeholder="Ej: Jordi"
                 value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
+                onChange={(event) => handleSearchChange(event.target.value)}
               />
               <button
                 type="button"
                 className="search-clear"
-                onClick={() => setSearchTerm('')}
+                onClick={() => handleSearchChange('')}
                 aria-label="Limpiar busqueda"
                 disabled={!searchTerm}
               >
@@ -381,7 +410,7 @@ function StudentsView({
           {filteredStudents.length === 0 && <p>No hay alumnos que coincidan con tu busqueda.</p>}
 
           <div className="students-grid">
-            {filteredStudents.map((student) => (
+            {paginatedStudents.map((student) => (
               <button
                 key={student.id}
                 type="button"
@@ -397,6 +426,29 @@ function StudentsView({
               </button>
             ))}
           </div>
+          {filteredStudents.length > 0 && (
+            <div className="pagination-row">
+              <button
+                type="button"
+                className="pagination-button"
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage === 1}
+              >
+                Anterior
+              </button>
+              <p className="pagination-info">
+                Pagina {currentPage} de {totalPages}
+              </p>
+              <button
+                type="button"
+                className="pagination-button"
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage === totalPages}
+              >
+                Siguiente
+              </button>
+            </div>
+          )}
         </>
       )}
     </section>
